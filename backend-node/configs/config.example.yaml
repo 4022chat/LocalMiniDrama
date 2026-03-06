@@ -42,3 +42,9 @@ style:
 vendor_lock:
   enabled: false
   config_file: "ai-configs-stary.json"
+
+# 中转图床（用于 Gemini 参考图上传）
+image_proxy:
+  # 图床 URL 有效期（小时）。zhongzhuan.chat 官方限制为 24h，建议设为 23 留出余量。
+  # 到期后缓存自动失效，下次使用时会重新上传，无需手动清理。
+  expire_hours: 23

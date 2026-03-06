@@ -5,6 +5,21 @@ const crypto = require('crypto');
 const aiConfigService = require('./aiConfigService');
 const uploadService = require('./uploadService');
 const taskService = require('./taskService');
+const { loadConfig } = require('../config');
+
+// 惰性加载配置，避免循环依赖与启动顺序问题
+let _appConfig = null;
+function getAppConfig() {
+  if (!_appConfig) {
+    try { _appConfig = loadConfig(); } catch (_) { _appConfig = {}; }
+  }
+  return _appConfig;
+}
+
+/** 从配置读取图床 URL 有效期（小时），默认 23h 留出余量 */
+function getProxyExpireHours() {
+  return Number(getAppConfig()?.image_proxy?.expire_hours ?? 23);
+}
 
 /**
  * 根据 provider 名推断接口规范（api_protocol 未设置时的兜底逻辑）
@@ -687,11 +702,22 @@ async function uploadToImageProxy(imageBuffer, mimeType, log, image_gen_id) {
 /**
  * 从 image_proxy_cache 表查询已缓存的图床 URL。
  * cache_key 规则：本地相对路径 或 data URL 的 sha256 前 16 字符。
+ * 若缓存已过期（超过 config.image_proxy.expire_hours），自动删除并返回 null，触发重新上传。
  */
 function getProxyCache(db, cacheKey) {
   try {
-    const row = db.prepare('SELECT proxy_url FROM image_proxy_cache WHERE cache_key = ?').get(cacheKey);
-    return row?.proxy_url || null;
+    const row = db.prepare('SELECT proxy_url, created_at FROM image_proxy_cache WHERE cache_key = ?').get(cacheKey);
+    if (!row?.proxy_url) return null;
+
+    const expireMs = getProxyExpireHours() * 3600 * 1000;
+    const createdAt = new Date(row.created_at).getTime();
+    if (isNaN(createdAt) || Date.now() - createdAt > expireMs) {
+      // 过期或时间无效：删除旧记录，返回 null 触发重新上传
+      try { db.prepare('DELETE FROM image_proxy_cache WHERE cache_key = ?').run(cacheKey); } catch (_) {}
+      return null;
+    }
+
+    return row.proxy_url;
   } catch (_) { return null; }
 }
 

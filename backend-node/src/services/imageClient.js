@@ -373,7 +373,10 @@ function resolveImageRef(value, filesBaseUrl, storageLocalPath) {
   if (!value || !String(value).trim()) return null;
   const s = String(value).trim();
   const baseUrl = (filesBaseUrl || '').replace(/\/$/, '');
-  const isLocalhost = baseUrl && /localhost|127\.0\.0\.1/i.test(baseUrl);
+  // isLocalhost: 只要 URL 本身或配置的 base_url 含 localhost/127，都视为本地
+  const isLocalhostUrl = /localhost|127\.0\.0\.1/i.test(s);
+  const isLocalhostBase = baseUrl && /localhost|127\.0\.0\.1/i.test(baseUrl);
+  const isLocalhost = isLocalhostUrl || isLocalhostBase;
 
   function toPublicUrl(v) {
     if (!v || !String(v).trim()) return null;
@@ -386,7 +389,10 @@ function resolveImageRef(value, filesBaseUrl, storageLocalPath) {
   let relPath = null;
   if (s.startsWith('http://') || s.startsWith('https://')) {
     if (!isLocalhost || !storageLocalPath) return s;
-    const afterStatic = s.split('/static/')[1] || (baseUrl ? s.replace(baseUrl + '/', '').replace(baseUrl, '') : null);
+    // 从 URL 中提取 /static/ 之后的相对路径；或去掉 baseUrl 前缀
+    const afterStatic = s.split('/static/')[1]
+      || (baseUrl ? s.replace(baseUrl + '/', '').replace(baseUrl, '') : null)
+      || s.replace(/^https?:\/\/[^/]+\//, '');
     if (afterStatic) relPath = afterStatic.replace(/^\//, '');
     else return s;
   } else if (storageLocalPath) {

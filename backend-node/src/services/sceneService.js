@@ -9,6 +9,7 @@ function updateScene(db, log, sceneId, req) {
   if (req.prompt != null) { updates.push('prompt = ?'); params.push(req.prompt); }
   if (req.image_url != null) { updates.push('image_url = ?'); params.push(req.image_url); }
   if (req.local_path !== undefined) { updates.push('local_path = ?'); params.push(req.local_path); }
+  if (req.extra_images !== undefined) { updates.push('extra_images = ?'); params.push(req.extra_images ?? null); }
   if (updates.length === 0) return { ok: true };
   params.push(new Date().toISOString(), sceneId);
   db.prepare('UPDATE scenes SET ' + updates.join(', ') + ', updated_at = ? WHERE id = ?').run(...params);
@@ -93,7 +94,7 @@ function deleteScenesByEpisodeId(db, log, episodeId) {
 
 function getSceneById(db, id) {
   const row = db.prepare('SELECT * FROM scenes WHERE id = ? AND deleted_at IS NULL').get(id);
-  return row ? { id: row.id, drama_id: row.drama_id, location: row.location, time: row.time, prompt: row.prompt, image_url: row.image_url, local_path: row.local_path, status: row.status, created_at: row.created_at, updated_at: row.updated_at } : null;
+  return row ? { id: row.id, drama_id: row.drama_id, location: row.location, time: row.time, prompt: row.prompt, image_url: row.image_url, local_path: row.local_path, extra_images: row.extra_images || null, status: row.status, created_at: row.created_at, updated_at: row.updated_at } : null;
 }
 
 module.exports = {

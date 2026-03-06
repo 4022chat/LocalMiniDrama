@@ -247,7 +247,7 @@ function generateStoryboard(db, log) {
     try {
       // 显式处理 model 为空的情况，转为 undefined 以便 service 层触发默认逻辑
       const model = (body.model && String(body.model).trim()) ? body.model : undefined;
-      console.log('==c generateStoryboard body:', JSON.stringify(body));
+      log.info('Generate storyboard request', { episode_id: req.params.episode_id, storyboard_count: body.storyboard_count, video_duration: body.video_duration });
       const resData = await dramaService.generateStoryboard(db, log, req.params.episode_id, {
         model: model,
         style: body.style,

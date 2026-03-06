@@ -120,13 +120,15 @@ function routes(db, cfg, log, uploadService) {
           if (out.error === 'character not found') return response.notFound(res, '角色不存在');
           return response.badRequest(res, out.error);
         }
-        if (body.local_path !== undefined) {
+        const extraFields = [];
+        const extraParams = [];
+        if (body.local_path !== undefined) { extraFields.push('local_path = ?'); extraParams.push(body.local_path ?? null); }
+        if (body.extra_images !== undefined) { extraFields.push('extra_images = ?'); extraParams.push(body.extra_images ?? null); }
+        if (extraFields.length > 0) {
           const charRow = db.prepare('SELECT id FROM characters WHERE id = ? AND deleted_at IS NULL').get(Number(req.params.id));
           if (charRow) {
-            db.prepare('UPDATE characters SET local_path = ?, updated_at = ? WHERE id = ?').run(
-              body.local_path ?? null,
-              new Date().toISOString(),
-              Number(req.params.id)
+            db.prepare(`UPDATE characters SET ${extraFields.join(', ')}, updated_at = ? WHERE id = ?`).run(
+              ...extraParams, new Date().toISOString(), Number(req.params.id)
             );
           }
         }

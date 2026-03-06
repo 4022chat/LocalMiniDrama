@@ -272,13 +272,14 @@ async function processStoryboardGeneration(db, log, cfg, taskId, episodeId, mode
   try {
     taskService.updateTaskStatus(db, taskId, 'processing', 10, '开始生成分镜头...');
     log.info('Processing storyboard generation', { task_id: taskId, episode_id: episodeId });
-
-    // 添加系统提示词：明确要求数量和时长
-    const constraintPrompt = `\nIMPORTANT: Please strictly follow the user's constraints on "Total shot count" and "Total video duration". Consolidate or split shots as needed to meet these targets within ±20% margin.`;
-    
+    log.info('Storyboard prompt preview', {
+      user_prompt_len: userPrompt ? userPrompt.length : 0,
+      system_prompt_len: systemPrompt ? systemPrompt.length : 0,
+      user_prompt_head: userPrompt ? userPrompt.slice(0, 200) : '',
+    });
     // max_tokens 不在此硬编码，由 AI 配置的 settings.max_tokens 控制（用户可按模型上限自行设置）。
     // 若用户未配置则不传，让模型使用自身默认值，避免超出不同模型的上限导致 400 错误。
-    const text = await aiClient.generateText(db, log, 'text', userPrompt, systemPrompt + constraintPrompt, {
+    const text = await aiClient.generateText(db, log, 'text', userPrompt, systemPrompt, {
       model: model || undefined,
       temperature: 0.7,
     });
@@ -289,7 +290,7 @@ async function processStoryboardGeneration(db, log, cfg, taskId, episodeId, mode
       task_id: taskId,
       text_type: typeof text,
       text_length: text ? String(text).length : 0,
-      text_preview: text ? String(text).slice(0, 500) : '(empty)',
+      text_preview: text ? String(text).slice(0, 2000) : '(empty)',
     });
 
     let storyboards = [];
@@ -420,7 +421,7 @@ function generateStoryboard(db, log, episodeId, model, style, storyboardCount, v
     }
   }
   
-  console.log('==c storyboardCount:', storyboardCount, 'videoDuration:', videoDuration, 'extraConstraint:', extraConstraint);
+  log.info('Storyboard generation params', { storyboard_count: storyboardCount, video_duration: videoDuration });
 
   const charListLabel = promptI18n.formatUserPrompt(cfg, 'character_list_label');
   const charConstraint = promptI18n.formatUserPrompt(cfg, 'character_constraint');
@@ -429,9 +430,30 @@ function generateStoryboard(db, log, episodeId, model, style, storyboardCount, v
   const suffix = promptI18n.getStoryboardUserPromptSuffix(cfg);
 
   const userPrompt =
-    `${scriptLabel}\n${scriptContent}\n\n${taskLabel}\n${taskInstruction}${extraConstraint}\n\n${charListLabel}\n${characterList}\n\n${charConstraint}\n\n${sceneListLabel}\n${sceneList}\n\n${sceneConstraint}\n\n【剧本原文】\n${scriptContent}\n\n${suffix}`;
-console.log("==c 用户提示词：",userPrompt);
-  const systemPrompt = promptI18n.getStoryboardSystemPrompt(cfg);
+    `${scriptLabel}\n${scriptContent}\n\n${taskLabel}\n${taskInstruction}${extraConstraint}\n\n${charListLabel}\n${characterList}\n\n${charConstraint}\n\n${sceneListLabel}\n${sceneList}\n\n${sceneConstraint}\n\n${suffix}`;
+
+  let systemPrompt = promptI18n.getStoryboardSystemPrompt(cfg);
+
+  // 当用户指定了分镜数量时，在系统提示词后追加最高优先级覆盖指令，
+  // 使"目标数量"优先于默认的"一动作一镜头、禁止合并"原则
+  if (storyboardCount && Number(storyboardCount) > 0) {
+    const targetCount = Number(storyboardCount);
+    const isEn = systemPrompt.includes('[Role]');
+    if (isEn) {
+      systemPrompt += `\n\n[HIGHEST PRIORITY — USER SPECIFIED COUNT]
+The user requires exactly ${targetCount} shots (±10% tolerance is acceptable).
+This requirement OVERRIDES the "one action = one shot, no merging" rule above.
+You MUST merge related consecutive actions into fewer shots OR split key moments into more shots to reach this target.
+Do NOT produce a shot count far from ${targetCount} under any circumstance.`;
+    } else {
+      systemPrompt += `\n\n【最高优先级——用户指定分镜数量】
+用户要求生成恰好 ${targetCount} 个分镜（允许 ±10% 的偏差，即 ${Math.floor(targetCount * 0.9)}~${Math.ceil(targetCount * 1.1)} 个均可接受）。
+此要求优先级高于上述所有原则，包括"一动作一镜头、禁止合并"的规则。
+- 若动作较多、自然拆分超过目标数量，请将相关联的连续小动作合并为一个镜头
+- 若动作较少、自然拆分不足目标数量，请将重要场景或情绪转折拆分为多个镜头
+- 严禁生成数量与 ${targetCount} 相差悬殊的分镜方案`;
+    }
+  }
 
   const task = taskService.createTask(db, log, 'storyboard_generation', String(episodeId));
   log.info('Generating storyboard asynchronously', {

@@ -11,6 +11,7 @@ function listByDramaId(db, dramaId) {
     prompt: r.prompt,
     image_url: r.image_url,
     local_path: r.local_path,
+    extra_images: r.extra_images || null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   }));
@@ -48,6 +49,7 @@ function getById(db, id) {
     prompt: r.prompt,
     image_url: r.image_url,
     local_path: r.local_path,
+    extra_images: r.extra_images || null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -64,6 +66,7 @@ function update(db, log, id, updates) {
   if (updates.prompt != null) { set.push('prompt = ?'); params.push(updates.prompt); }
   if (updates.image_url != null) { set.push('image_url = ?'); params.push(updates.image_url); }
   if (updates.local_path !== undefined) { set.push('local_path = ?'); params.push(updates.local_path ?? null); }
+  if (updates.extra_images !== undefined) { set.push('extra_images = ?'); params.push(updates.extra_images ?? null); }
   if (set.length === 0) return existing;
   params.push(new Date().toISOString(), id);
   db.prepare('UPDATE props SET ' + set.join(', ') + ', updated_at = ? WHERE id = ?').run(...params);

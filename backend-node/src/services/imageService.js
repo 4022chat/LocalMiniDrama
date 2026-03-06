@@ -196,17 +196,35 @@ async function processImageGeneration(db, log, imageGenId) {
       if (sb) {
         const refs = [];
         if (sb.scene_id) {
-          const scene = db.prepare('SELECT image_url, local_path FROM scenes WHERE id = ? AND deleted_at IS NULL').get(sb.scene_id);
-          if (scene && (scene.local_path || scene.image_url)) refs.push(scene.local_path || scene.image_url);
+          const scene = db.prepare('SELECT image_url, local_path, extra_images FROM scenes WHERE id = ? AND deleted_at IS NULL').get(sb.scene_id);
+          if (scene && (scene.local_path || scene.image_url)) {
+            refs.push(scene.local_path || scene.image_url);
+            if (scene.extra_images) {
+              try {
+                const extras = JSON.parse(scene.extra_images);
+                if (Array.isArray(extras) && extras[0]) refs.push(extras[0]);
+              } catch (_) {}
+            }
+          }
         }
         if (sb.characters) {
           try {
             const charList = JSON.parse(sb.characters);
             if (Array.isArray(charList)) {
-              for (const item of charList.slice(0, 5)) {
+              for (const item of charList.slice(0, 4)) {
                 const cid = typeof item === 'object' && item != null ? item.id : item;
-                const c = db.prepare('SELECT image_url, local_path FROM characters WHERE id = ? AND deleted_at IS NULL').get(Number(cid));
-                if (c && (c.local_path || c.image_url)) refs.push(c.local_path || c.image_url);
+                const c = db.prepare('SELECT image_url, local_path, extra_images FROM characters WHERE id = ? AND deleted_at IS NULL').get(Number(cid));
+                if (!c) continue;
+                // 优先使用 local_path，否则 image_url
+                const primaryRef = c.local_path || c.image_url;
+                if (primaryRef) refs.push(primaryRef);
+                // 将 extra_images 中第一张也作为参考（多角度参考），但控制总量
+                if (c.extra_images && refs.length < 6) {
+                  try {
+                    const extras = JSON.parse(c.extra_images);
+                    if (Array.isArray(extras) && extras[0]) refs.push(extras[0]);
+                  } catch (_) {}
+                }
               }
             }
           } catch (_) {}

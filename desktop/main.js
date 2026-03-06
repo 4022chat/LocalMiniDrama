@@ -2,8 +2,21 @@ const { app, BrowserWindow, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-// 显式固定 userData 目录为 LocalMiniDrama，防止 productName 变更导致用户数据路径改变
-app.setPath('userData', path.join(app.getPath('appData'), 'LocalMiniDrama'));
+// 显式固定 userData 目录，使开发模式与打包 exe 路径完全一致，防止 productName 变更导致路径漂移
+const USERDATA_DIR = path.join(app.getPath('appData'), 'localminidrama-desktop');
+app.setPath('userData', USERDATA_DIR);
+
+// 兼容迁移：若旧路径 LocalMiniDrama 有数据而新路径为空，自动迁移
+;(function migrateOldUserData() {
+  const oldPath = path.join(app.getPath('appData'), 'LocalMiniDrama');
+  if (fs.existsSync(oldPath) && !fs.existsSync(USERDATA_DIR)) {
+    try {
+      fs.renameSync(oldPath, USERDATA_DIR);
+    } catch (e) {
+      // rename 跨驱动器时会失败，此时静默忽略，用户数据仍可手动迁移
+    }
+  }
+})();
 
 const BACKEND_APP_PATH = path.join(__dirname, 'backend-app');
 const BACKEND_NODE_PATH = path.join(__dirname, '..', 'backend-node');

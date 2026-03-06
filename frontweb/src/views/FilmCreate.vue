@@ -248,10 +248,6 @@
                     </div>
                     <div class="asset-desc-full">{{ char.appearance || char.description || '暂无描述' }}</div>
                     <div class="asset-btns">
-                      <el-button type="primary" size="small" :loading="generatingCharId === char.id" @click="onGenerateCharacterImage(char)">
-                        <el-icon v-if="!generatingCharId || generatingCharId !== char.id"><MagicStick /></el-icon>
-                        AI 生成
-                      </el-button>
                       <el-button size="small" @click="editCharacter(char)">编辑</el-button>
                       <el-button size="small" :loading="addingCharToLibraryId === char.id" :disabled="!hasAssetImage(char)" @click="onAddCharacterToLibrary(char)">
                         加入本剧库
@@ -259,26 +255,62 @@
                       <el-button size="small" :loading="addingCharToMaterialId === char.id" :disabled="!hasAssetImage(char)" @click="onAddCharacterToMaterialLibrary(char)">
                         加入素材库
                       </el-button>
-                      <el-button size="small" class="btn-upload" :loading="uploadingResourceId === 'char-' + char.id" @click="onUploadResourceClick('character', char.id)">
+                    </div>
+                    <div v-if="getCharAffectedStoryboards(char.id).length" class="asset-storyboard-link">
+                      <span class="asl-label">影响的分镜：</span>
+                      <span
+                        v-for="sb in getCharAffectedStoryboards(char.id)"
+                        :key="sb.id"
+                        class="asl-chip"
+                        title="点击跳转到该分镜"
+                        @click="scrollToStoryboard(sb.id)"
+                      >#{{ sb.storyboard_number }}</span>
+                      <span v-if="regenSbImagesForAsset.has('char-' + char.id) && regenSbImagesProgress['char-' + char.id]" class="asl-progress">
+                        {{ regenSbImagesProgress['char-' + char.id].current }}/{{ regenSbImagesProgress['char-' + char.id].total }}
+                      </span>
+                      <el-button
+                        size="small"
+                        class="asl-regen-btn"
+                        :loading="regenSbImagesForAsset.has('char-' + char.id)"
+                        @click="onRegenAffectedSbImages('char-' + char.id, getCharAffectedStoryboards(char.id))"
+                      >
+                        <span v-if="!regenSbImagesForAsset.has('char-' + char.id)">↻ 重新生成分镜图</span>
+                      </el-button>
+                    </div>
+                  </div>
+                  <div class="asset-cover-wrap">
+                    <div
+                      class="asset-cover"
+                      :class="{ 'asset-cover--clickable': hasAssetImage(char), 'asset-cover--dragover': dragOverResourceKey === 'char-' + char.id }"
+                      role="button"
+                      tabindex="0"
+                      @click="hasAssetImage(char) && openImagePreview(assetImageUrl(char))"
+                      @dragover="onResourceDragOver($event, 'character', char.id)"
+                      @dragleave="onResourceDragLeave($event, 'char-' + char.id)"
+                      @drop="onResourceDrop($event, 'character', char.id)"
+                    >
+                      <img v-if="hasAssetImage(char)" :src="assetImageUrl(char)" class="cover-img" alt="" />
+                      <div v-else-if="char.error_msg || char.errorMsg" class="cover-placeholder error" :title="char.error_msg || char.errorMsg">{{ char.error_msg || char.errorMsg }}</div>
+                      <div v-else class="cover-placeholder">暂无图</div>
+                      <div v-if="dragOverResourceKey === 'char-' + char.id" class="asset-cover-drop-hint">松开上传</div>
+                    </div>
+                    <!-- 额外参考图条 -->
+                    <div v-if="parseExtraImages(char).length" class="extra-images-strip">
+                      <div v-for="ep in parseExtraImages(char)" :key="ep" class="extra-thumb" :title="'点击设为主图'">
+                        <img :src="localPathToUrl(ep)" alt="" @click="onSetPrimaryImage('character', char, ep)" />
+                        <button class="extra-thumb-remove" title="移除" @click.stop="onRemoveExtraImage('character', char, ep)">×</button>
+                      </div>
+                    </div>
+                    <div class="asset-cover-actions">
+                      <el-button type="primary" size="small" :loading="generatingCharIds.has(char.id)" @click="onGenerateCharacterImage(char)">
+                        <el-icon v-if="!generatingCharIds.has(char.id)"><MagicStick /></el-icon>
+                        AI 生成
+                      </el-button>
+                      <el-button type="success" size="small" :loading="uploadingResourceId === 'char-' + char.id" @click="onUploadResourceClick('character', char.id)">
                         <el-icon v-if="uploadingResourceId !== 'char-' + char.id"><Upload /></el-icon>
                         上传
                       </el-button>
                     </div>
-                  </div>
-                  <div
-                    class="asset-cover"
-                    :class="{ 'asset-cover--clickable': hasAssetImage(char), 'asset-cover--dragover': dragOverResourceKey === 'char-' + char.id }"
-                    role="button"
-                    tabindex="0"
-                    @click="hasAssetImage(char) && openImagePreview(assetImageUrl(char))"
-                    @dragover="onResourceDragOver($event, 'character', char.id)"
-                    @dragleave="onResourceDragLeave($event, 'char-' + char.id)"
-                    @drop="onResourceDrop($event, 'character', char.id)"
-                  >
-                    <img v-if="hasAssetImage(char)" :src="assetImageUrl(char)" class="cover-img" alt="" />
-                    <div v-else-if="char.error_msg || char.errorMsg" class="cover-placeholder error" :title="char.error_msg || char.errorMsg">{{ char.error_msg || char.errorMsg }}</div>
-                    <div v-else class="cover-placeholder">暂无图</div>
-                    <div v-if="dragOverResourceKey === 'char-' + char.id" class="asset-cover-drop-hint">松开上传</div>
                   </div>
                 </div>
                 <div v-if="characters.length === 0" class="empty-tip">暂无角色，请先「AI 生成角色」或在上一步保存剧本后提取</div>
@@ -309,10 +341,6 @@
                     </div>
                     <div class="asset-desc-full">{{ prop.description || prop.prompt || '暂无描述' }}</div>
                     <div class="asset-btns">
-                      <el-button type="primary" size="small" :loading="generatingPropId === prop.id" @click="onGeneratePropImage(prop)">
-                        <el-icon v-if="!generatingPropId || generatingPropId !== prop.id"><MagicStick /></el-icon>
-                        AI 生成
-                      </el-button>
                       <el-button size="small" @click="editProp(prop)">编辑</el-button>
                       <el-button size="small" :loading="addingPropToLibraryId === prop.id" :disabled="!hasAssetImage(prop)" @click="onAddPropToLibrary(prop)">
                         加入本剧库
@@ -320,26 +348,40 @@
                       <el-button size="small" :loading="addingPropToMaterialId === prop.id" :disabled="!hasAssetImage(prop)" @click="onAddPropToMaterialLibrary(prop)">
                         加入素材库
                       </el-button>
-                      <el-button size="small" class="btn-upload" :loading="uploadingResourceId === 'prop-' + prop.id" @click="onUploadResourceClick('prop', prop.id)">
+                    </div>
+                  </div>
+                  <div class="asset-cover-wrap">
+                    <div
+                      class="asset-cover"
+                      :class="{ 'asset-cover--clickable': hasAssetImage(prop), 'asset-cover--dragover': dragOverResourceKey === 'prop-' + prop.id }"
+                      role="button"
+                      tabindex="0"
+                      @click="hasAssetImage(prop) && openImagePreview(assetImageUrl(prop))"
+                      @dragover="onResourceDragOver($event, 'prop', prop.id)"
+                      @dragleave="onResourceDragLeave($event, 'prop-' + prop.id)"
+                      @drop="onResourceDrop($event, 'prop', prop.id)"
+                    >
+                      <img v-if="hasAssetImage(prop)" :src="assetImageUrl(prop)" class="cover-img" alt="" />
+                      <div v-else-if="prop.error_msg || prop.errorMsg" class="cover-placeholder error" :title="prop.error_msg || prop.errorMsg">{{ prop.error_msg || prop.errorMsg }}</div>
+                      <div v-else class="cover-placeholder">暂无图</div>
+                      <div v-if="dragOverResourceKey === 'prop-' + prop.id" class="asset-cover-drop-hint">松开上传</div>
+                    </div>
+                    <div v-if="parseExtraImages(prop).length" class="extra-images-strip">
+                      <div v-for="ep in parseExtraImages(prop)" :key="ep" class="extra-thumb" title="点击设为主图">
+                        <img :src="localPathToUrl(ep)" alt="" @click="onSetPrimaryImage('prop', prop, ep)" />
+                        <button class="extra-thumb-remove" title="移除" @click.stop="onRemoveExtraImage('prop', prop, ep)">×</button>
+                      </div>
+                    </div>
+                    <div class="asset-cover-actions">
+                      <el-button type="primary" size="small" :loading="generatingPropIds.has(prop.id)" @click="onGeneratePropImage(prop)">
+                        <el-icon v-if="!generatingPropIds.has(prop.id)"><MagicStick /></el-icon>
+                        AI 生成
+                      </el-button>
+                      <el-button type="success" size="small" :loading="uploadingResourceId === 'prop-' + prop.id" @click="onUploadResourceClick('prop', prop.id)">
                         <el-icon v-if="uploadingResourceId !== 'prop-' + prop.id"><Upload /></el-icon>
                         上传
                       </el-button>
                     </div>
-                  </div>
-                  <div
-                    class="asset-cover"
-                    :class="{ 'asset-cover--clickable': hasAssetImage(prop), 'asset-cover--dragover': dragOverResourceKey === 'prop-' + prop.id }"
-                    role="button"
-                    tabindex="0"
-                    @click="hasAssetImage(prop) && openImagePreview(assetImageUrl(prop))"
-                    @dragover="onResourceDragOver($event, 'prop', prop.id)"
-                    @dragleave="onResourceDragLeave($event, 'prop-' + prop.id)"
-                    @drop="onResourceDrop($event, 'prop', prop.id)"
-                  >
-                    <img v-if="hasAssetImage(prop)" :src="assetImageUrl(prop)" class="cover-img" alt="" />
-                    <div v-else-if="prop.error_msg || prop.errorMsg" class="cover-placeholder error" :title="prop.error_msg || prop.errorMsg">{{ prop.error_msg || prop.errorMsg }}</div>
-                    <div v-else class="cover-placeholder">暂无图</div>
-                    <div v-if="dragOverResourceKey === 'prop-' + prop.id" class="asset-cover-drop-hint">松开上传</div>
                   </div>
                 </div>
                 <div v-if="props.length === 0" class="empty-tip">暂无道具，可从剧本提取或添加</div>
@@ -372,10 +414,6 @@
                     </div>
                     <div class="asset-desc-full">{{ scene.description || scene.prompt || scene.time || '暂无描述' }}</div>
                     <div class="asset-btns">
-                      <el-button type="primary" size="small" :loading="generatingSceneId === scene.id" @click="onGenerateSceneImage(scene)">
-                        <el-icon v-if="!generatingSceneId || generatingSceneId !== scene.id"><MagicStick /></el-icon>
-                        AI 生成
-                      </el-button>
                       <el-button size="small" @click="editScene(scene)">编辑</el-button>
                       <el-button size="small" :loading="addingSceneToLibraryId === scene.id" :disabled="!hasAssetImage(scene)" @click="onAddSceneToLibrary(scene)">
                         加入本剧库
@@ -383,26 +421,61 @@
                       <el-button size="small" :loading="addingSceneToMaterialId === scene.id" :disabled="!hasAssetImage(scene)" @click="onAddSceneToMaterialLibrary(scene)">
                         加入素材库
                       </el-button>
-                      <el-button size="small" class="btn-upload" :loading="uploadingResourceId === 'scene-' + scene.id" @click="onUploadResourceClick('scene', scene.id)">
+                    </div>
+                    <div v-if="getSceneAffectedStoryboards(scene.id).length" class="asset-storyboard-link">
+                      <span class="asl-label">影响的分镜：</span>
+                      <span
+                        v-for="sb in getSceneAffectedStoryboards(scene.id)"
+                        :key="sb.id"
+                        class="asl-chip"
+                        title="点击跳转到该分镜"
+                        @click="scrollToStoryboard(sb.id)"
+                      >#{{ sb.storyboard_number }}</span>
+                      <span v-if="regenSbImagesForAsset.has('scene-' + scene.id) && regenSbImagesProgress['scene-' + scene.id]" class="asl-progress">
+                        {{ regenSbImagesProgress['scene-' + scene.id].current }}/{{ regenSbImagesProgress['scene-' + scene.id].total }}
+                      </span>
+                      <el-button
+                        size="small"
+                        class="asl-regen-btn"
+                        :loading="regenSbImagesForAsset.has('scene-' + scene.id)"
+                        @click="onRegenAffectedSbImages('scene-' + scene.id, getSceneAffectedStoryboards(scene.id))"
+                      >
+                        <span v-if="!regenSbImagesForAsset.has('scene-' + scene.id)">↻ 重新生成分镜图</span>
+                      </el-button>
+                    </div>
+                  </div>
+                  <div class="asset-cover-wrap">
+                    <div
+                      class="asset-cover"
+                      :class="{ 'asset-cover--clickable': hasAssetImage(scene), 'asset-cover--dragover': dragOverResourceKey === 'scene-' + scene.id }"
+                      role="button"
+                      tabindex="0"
+                      @click="hasAssetImage(scene) && openImagePreview(assetImageUrl(scene))"
+                      @dragover="onResourceDragOver($event, 'scene', scene.id)"
+                      @dragleave="onResourceDragLeave($event, 'scene-' + scene.id)"
+                      @drop="onResourceDrop($event, 'scene', scene.id)"
+                    >
+                      <img v-if="hasAssetImage(scene)" :src="assetImageUrl(scene)" class="cover-img" alt="" />
+                      <div v-else-if="scene.error_msg || scene.errorMsg" class="cover-placeholder error" :title="scene.error_msg || scene.errorMsg">{{ scene.error_msg || scene.errorMsg }}</div>
+                      <div v-else class="cover-placeholder">暂无图</div>
+                      <div v-if="dragOverResourceKey === 'scene-' + scene.id" class="asset-cover-drop-hint">松开上传</div>
+                    </div>
+                    <div v-if="parseExtraImages(scene).length" class="extra-images-strip">
+                      <div v-for="ep in parseExtraImages(scene)" :key="ep" class="extra-thumb" title="点击设为主图">
+                        <img :src="localPathToUrl(ep)" alt="" @click="onSetPrimaryImage('scene', scene, ep)" />
+                        <button class="extra-thumb-remove" title="移除" @click.stop="onRemoveExtraImage('scene', scene, ep)">×</button>
+                      </div>
+                    </div>
+                    <div class="asset-cover-actions">
+                      <el-button type="primary" size="small" :loading="generatingSceneIds.has(scene.id)" @click="onGenerateSceneImage(scene)">
+                        <el-icon v-if="!generatingSceneIds.has(scene.id)"><MagicStick /></el-icon>
+                        AI 生成
+                      </el-button>
+                      <el-button type="success" size="small" :loading="uploadingResourceId === 'scene-' + scene.id" @click="onUploadResourceClick('scene', scene.id)">
                         <el-icon v-if="uploadingResourceId !== 'scene-' + scene.id"><Upload /></el-icon>
                         上传
                       </el-button>
                     </div>
-                  </div>
-                  <div
-                    class="asset-cover"
-                    :class="{ 'asset-cover--clickable': hasAssetImage(scene), 'asset-cover--dragover': dragOverResourceKey === 'scene-' + scene.id }"
-                    role="button"
-                    tabindex="0"
-                    @click="hasAssetImage(scene) && openImagePreview(assetImageUrl(scene))"
-                    @dragover="onResourceDragOver($event, 'scene', scene.id)"
-                    @dragleave="onResourceDragLeave($event, 'scene-' + scene.id)"
-                    @drop="onResourceDrop($event, 'scene', scene.id)"
-                  >
-                    <img v-if="hasAssetImage(scene)" :src="assetImageUrl(scene)" class="cover-img" alt="" />
-                    <div v-else-if="scene.error_msg || scene.errorMsg" class="cover-placeholder error" :title="scene.error_msg || scene.errorMsg">{{ scene.error_msg || scene.errorMsg }}</div>
-                    <div v-else class="cover-placeholder">暂无图</div>
-                    <div v-if="dragOverResourceKey === 'scene-' + scene.id" class="asset-cover-drop-hint">松开上传</div>
                   </div>
                 </div>
                 <div v-if="scenes.length === 0" class="empty-tip">暂无场景，请从剧本提取</div>
@@ -431,7 +504,7 @@
             <span class="sb-config-hint">留空由 AI 决定</span>
           </label>
         </div>
-        <div class="asset-actions">
+        <div class="asset-actions sb-batch-actions">
           <el-button
             type="primary"
             size="large"
@@ -441,6 +514,55 @@
           >
             {{ storyboards.length > 0 ? '重新生成分镜' : 'AI 生成分镜' }}
           </el-button>
+          <template v-if="storyboards.length > 0">
+            <div class="sb-batch-right">
+              <el-button
+                type="success"
+                plain
+                size="large"
+                :loading="batchImageRunning"
+                :disabled="!currentEpisodeId || batchImageRunning || batchVideoRunning || pipelineRunning || storyboardGenerating"
+                @click="startBatchImageGeneration"
+              >
+                批量生成分镜图
+              </el-button>
+              <el-button
+                type="warning"
+                plain
+                size="large"
+                :loading="batchVideoRunning"
+                :disabled="!currentEpisodeId || batchImageRunning || batchVideoRunning || pipelineRunning || storyboardGenerating"
+                @click="startBatchVideoGeneration"
+              >
+                批量生成分镜视频
+              </el-button>
+              <el-button v-if="batchImageRunning" size="large" type="danger" plain @click="batchImageStopping = true">停止图片</el-button>
+              <el-button v-if="batchVideoRunning" size="large" type="danger" plain @click="batchVideoStopping = true">停止视频</el-button>
+            </div>
+          </template>
+        </div>
+        <!-- 批量生成进度 -->
+        <div v-if="batchImageRunning || batchVideoRunning || batchImageErrors.length || batchVideoErrors.length" class="batch-status">
+          <div v-if="batchImageRunning" class="batch-progress">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>批量生成分镜图：{{ batchImageProgress.current }}/{{ batchImageProgress.total }}</span>
+            <span v-if="batchImageProgress.failed > 0" class="batch-failed">{{ batchImageProgress.failed }} 条失败</span>
+            <span v-if="batchImageStopping" class="batch-stopping">（正在停止...）</span>
+          </div>
+          <div v-if="batchVideoRunning" class="batch-progress">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>批量生成分镜视频：{{ batchVideoProgress.current }}/{{ batchVideoProgress.total }}</span>
+            <span v-if="batchVideoProgress.failed > 0" class="batch-failed">{{ batchVideoProgress.failed }} 条失败</span>
+            <span v-if="batchVideoStopping" class="batch-stopping">（正在停止...）</span>
+          </div>
+          <div v-if="batchImageErrors.length > 0" class="batch-error-log">
+            <div class="batch-error-title">分镜图生成失败记录：</div>
+            <div v-for="(e, i) in batchImageErrors" :key="i" class="batch-error-line">{{ e }}</div>
+          </div>
+          <div v-if="batchVideoErrors.length > 0" class="batch-error-log">
+            <div class="batch-error-title">分镜视频生成失败记录：</div>
+            <div v-for="(e, i) in batchVideoErrors" :key="i" class="batch-error-line">{{ e }}</div>
+          </div>
         </div>
         <div v-if="storyboardGenerating" class="storyboard-generating-tip">
           <el-icon class="is-loading"><Loading /></el-icon>
@@ -614,14 +736,14 @@
                 </template>
                 <template v-else-if="sb.error_msg || sb.errorMsg">
                   <div class="sb-image-error" :title="sb.error_msg || sb.errorMsg">{{ sb.error_msg || sb.errorMsg }}</div>
-                  <el-button type="primary" size="small" class="sb-gen-btn" :loading="generatingSbImageId === sb.id" @click="onGenerateSbImage(sb)">
+                  <el-button type="primary" size="small" class="sb-gen-btn" :loading="generatingSbImageIds.has(sb.id)" @click="onGenerateSbImage(sb)">
                     <el-icon><Refresh /></el-icon>
                     重试
                   </el-button>
                   <el-button size="small" :loading="uploadingSbImageId === sb.id" @click="onUploadSbImageClick(sb)">上传</el-button>
                 </template>
                 <template v-else>
-                  <el-button type="primary" size="small" class="sb-gen-btn" :loading="generatingSbImageId === sb.id" @click="onGenerateSbImage(sb)">
+                  <el-button type="primary" size="small" class="sb-gen-btn" :loading="generatingSbImageIds.has(sb.id)" @click="onGenerateSbImage(sb)">
                     <el-icon><MagicStick /></el-icon>
                     生成分镜
                   </el-button>
@@ -630,7 +752,7 @@
                 <div v-if="dragOverSbId === sb.id" class="sb-image-area-drop-hint">松开上传</div>
               </div>
               <div v-if="hasSbImage(sb)" class="sb-image-actions">
-                <el-button size="small" :loading="generatingSbImageId === sb.id" @click="onGenerateSbImage(sb)">重新生成</el-button>
+                <el-button size="small" :loading="generatingSbImageIds.has(sb.id)" @click="onGenerateSbImage(sb)">重新生成</el-button>
                 <el-button size="small" :loading="uploadingSbImageId === sb.id" @click="onUploadSbImageClick(sb)">上传</el-button>
               </div>
             </div>
@@ -1113,7 +1235,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -1260,9 +1382,9 @@ const currentEpisodeVideoUrl = computed(() => {
 })
 
 const charactersGenerating = ref(false)
-const generatingCharId = ref(null)
-const generatingPropId = ref(null)
-const generatingSceneId = ref(null)
+const generatingCharIds = reactive(new Set())
+const generatingPropIds = reactive(new Set())
+const generatingSceneIds = reactive(new Set())
 const propsExtracting = ref(false)
 const scenesExtracting = ref(false)
 const storyboardGenerating = ref(false)
@@ -1317,8 +1439,21 @@ const sbMovement = ref({})
 const sbImages = ref({})
 const sbVideos = ref({})
 const sbVideoErrors = ref({})
-const generatingSbImageId = ref(null)
+const generatingSbImageIds = reactive(new Set())
 const generatingSbVideoId = ref(null)
+// 重新生成角色/场景关联分镜图的 loading set，key: 'char-{id}' | 'scene-{id}'
+const regenSbImagesForAsset = reactive(new Set())
+const regenSbImagesProgress = ref({})
+// 批量生成分镜图
+const batchImageRunning = ref(false)
+const batchImageStopping = ref(false)
+const batchImageProgress = ref({ current: 0, total: 0, failed: 0 })
+const batchImageErrors = ref([])
+// 批量生成分镜视频
+const batchVideoRunning = ref(false)
+const batchVideoStopping = ref(false)
+const batchVideoProgress = ref({ current: 0, total: 0, failed: 0 })
+const batchVideoErrors = ref([])
 /** 正在编辑视频提示词的分镜 id；编辑中显示文本框与保存/取消 */
 const editingSbVideoPromptId = ref(null)
 const editingSbVideoPromptText = ref('')
@@ -1530,7 +1665,7 @@ async function onGenerateSbImage(sb) {
   if (!dramaId.value || !sb?.id) return
   sb.errorMsg = ''
   sb.error_msg = ''
-  generatingSbImageId.value = sb.id
+  generatingSbImageIds.add(sb.id)
   try {
     const res = await imagesAPI.create({
       storyboard_id: sb.id,
@@ -1555,7 +1690,7 @@ async function onGenerateSbImage(sb) {
     sb.errorMsg = e.message || '生成失败'
     ElMessage.error(e.message || '生成失败')
   } finally {
-    generatingSbImageId.value = null
+    generatingSbImageIds.delete(sb.id)
   }
 }
 
@@ -1759,11 +1894,94 @@ function getSbSelectedProps(sbId) {
 }
 
 function onStoryboardCharacterChange(sbId) {
-  // 可在此调用后端更新分镜关联角色
+  const ids = sbCharacterIds.value[sbId] || []
+  storyboardsAPI.update(sbId, { character_ids: ids }).catch(() => {})
 }
 
 function onStoryboardSceneChange(sbId) {
-  // 可在此调用后端更新分镜场景
+  const sceneId = sbSceneId.value[sbId] ?? null
+  storyboardsAPI.update(sbId, { scene_id: sceneId }).catch(() => {})
+}
+
+/** 返回包含指定角色的所有分镜（已排序） */
+function getCharAffectedStoryboards(charId) {
+  return (storyboards.value || []).filter((sb) => {
+    if (!sb.characters) return false
+    const chars = Array.isArray(sb.characters) ? sb.characters : []
+    return chars.some((c) => Number(typeof c === 'object' && c != null ? c.id : c) === Number(charId))
+  })
+}
+
+/** 返回指定场景关联的所有分镜 */
+function getSceneAffectedStoryboards(sceneId) {
+  return (storyboards.value || []).filter((sb) => sb.scene_id != null && Number(sb.scene_id) === Number(sceneId))
+}
+
+/** 点击分镜 chip → 滚动到对应分镜行 */
+function scrollToStoryboard(sbId) {
+  const el = document.getElementById('sb-' + sbId)
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+/** 对关联分镜批量重新生成图片 */
+async function onRegenAffectedSbImages(assetKey, affectedBoards) {
+  if (!affectedBoards.length || regenSbImagesForAsset.has(assetKey)) return
+  try {
+    await ElMessageBox.confirm(
+      `将为 ${affectedBoards.length} 个关联分镜重新生成图片（#${affectedBoards.map((s) => s.storyboard_number).join('、#')}），原有图片将被覆盖，是否继续？`,
+      '重新生成关联分镜图',
+      { confirmButtonText: '确认生成', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  regenSbImagesForAsset.add(assetKey)
+  // 用 Map 存进度以便响应式更新
+  if (!regenSbImagesProgress.value) regenSbImagesProgress.value = {}
+  regenSbImagesProgress.value[assetKey] = { current: 0, total: affectedBoards.length }
+  let failed = 0
+  try {
+    for (let i = 0; i < affectedBoards.length; i++) {
+      regenSbImagesProgress.value[assetKey] = { current: i + 1, total: affectedBoards.length }
+      const sb = affectedBoards[i]
+      try {
+        const res = await imagesAPI.create({
+          storyboard_id: sb.id,
+          drama_id: dramaId.value,
+          prompt: sb.image_prompt || sb.description || '',
+          style: getSelectedStyle()
+        })
+        if (res?.task_id) {
+          const pollRes = await new Promise((resolve) => {
+            const maxAttempts = 180
+            let attempts = 0
+            const tick = async () => {
+              attempts++
+              try {
+                const t = await taskAPI.get(res.task_id)
+                if (t.status === 'completed') { await loadStoryboardMedia(); return resolve({ status: 'completed' }) }
+                if (t.status === 'failed') return resolve({ status: 'failed', error: t.error || '任务失败' })
+              } catch (_) {}
+              if (attempts < maxAttempts) setTimeout(tick, 2000)
+              else resolve({ status: 'timeout' })
+            }
+            setTimeout(tick, 2000)
+          })
+          if (pollRes?.status !== 'completed') failed++
+        } else {
+          await loadStoryboardMedia()
+        }
+      } catch (_) {
+        failed++
+      }
+      if (i < affectedBoards.length - 1) await new Promise((r) => setTimeout(r, 500))
+    }
+    if (failed === 0) ElMessage.success(`已重新生成 ${affectedBoards.length} 张关联分镜图`)
+    else ElMessage.warning(`完成，${failed}/${affectedBoards.length} 条失败`)
+  } finally {
+    regenSbImagesForAsset.delete(assetKey)
+    if (regenSbImagesProgress.value) delete regenSbImagesProgress.value[assetKey]
+  }
 }
 
 function updateStoryboardDialogue(sbId) {
@@ -2029,6 +2247,30 @@ function onUploadResourceClick(type, id) {
   resourceImageFileInput.value?.click()
 }
 
+// 解析 extra_images JSON，返回 local_path 数组
+function parseExtraImages(item) {
+  if (!item?.extra_images) return []
+  try {
+    const arr = typeof item.extra_images === 'string' ? JSON.parse(item.extra_images) : item.extra_images
+    return Array.isArray(arr) ? arr.filter(Boolean) : []
+  } catch { return [] }
+}
+
+// 将 local_path 转成可访问的 URL
+function localPathToUrl(p) {
+  if (!p) return ''
+  if (p.startsWith('http')) return p
+  return '/static/' + p.replace(/^\//, '')
+}
+
+// 查找角色/道具/场景在 store 中的当前对象
+function findResource(type, id) {
+  const list = type === 'character' ? (store.characters ?? [])
+    : type === 'prop' ? (store.props ?? [])
+    : (store.scenes ?? [])
+  return list.find((x) => Number(x.id) === Number(id)) || null
+}
+
 async function doUploadResourceImage(type, id, file) {
   if (!file || !type || id == null) return
   const key = type === 'character' ? 'char-' : type === 'prop' ? 'prop-' : 'scene-'
@@ -2036,17 +2278,35 @@ async function doUploadResourceImage(type, id, file) {
   try {
     const res = await uploadAPI.uploadImage(file)
     const data = res?.data ?? res
-    const url = data?.url || data?.path || data?.local_path
-    if (!url) {
-      ElMessage.error('上传未返回地址')
-      return
-    }
-    if (type === 'character') {
-      await characterAPI.putImage(id, { image_url: url, local_path: null })
-    } else if (type === 'prop') {
-      await propAPI.update(id, { image_url: url, local_path: null })
-    } else if (type === 'scene') {
-      await sceneAPI.update(id, { image_url: url, local_path: null })
+    const uploadedLocalPath = data?.local_path || data?.path || null
+    const url = data?.url || uploadedLocalPath
+    if (!url) { ElMessage.error('上传未返回地址'); return }
+
+    const current = findResource(type, id)
+    const hasPrimary = !!(current?.local_path || current?.image_url)
+
+    if (hasPrimary) {
+      // 已有主图 → 追加到 extra_images
+      const extras = parseExtraImages(current)
+      const newPath = uploadedLocalPath || url
+      if (!extras.includes(newPath)) extras.push(newPath)
+      const extraJson = JSON.stringify(extras)
+      if (type === 'character') {
+        await characterAPI.putImage(id, { extra_images: extraJson })
+      } else if (type === 'prop') {
+        await propAPI.update(id, { extra_images: extraJson })
+      } else if (type === 'scene') {
+        await sceneAPI.update(id, { extra_images: extraJson })
+      }
+    } else {
+      // 无主图 → 设为主图
+      if (type === 'character') {
+        await characterAPI.putImage(id, { image_url: url, local_path: uploadedLocalPath ?? null })
+      } else if (type === 'prop') {
+        await propAPI.update(id, { image_url: url, local_path: uploadedLocalPath ?? null })
+      } else if (type === 'scene') {
+        await sceneAPI.update(id, { image_url: url, local_path: uploadedLocalPath ?? null })
+      }
     }
     await loadDrama()
     ElMessage.success('上传成功')
@@ -2054,6 +2314,45 @@ async function doUploadResourceImage(type, id, file) {
     ElMessage.error(e.message || '上传失败')
   } finally {
     uploadingResourceId.value = null
+  }
+}
+
+// 将某张额外图片设为主图（主图降级到 extra_images 第一位）
+async function onSetPrimaryImage(type, item, extraPath) {
+  const extras = parseExtraImages(item)
+  const oldPrimary = item.local_path || ''
+  const newExtras = extras.filter((p) => p !== extraPath)
+  if (oldPrimary) newExtras.unshift(oldPrimary)
+  const extraJson = JSON.stringify(newExtras)
+  try {
+    if (type === 'character') {
+      await characterAPI.putImage(item.id, { local_path: extraPath, image_url: '', extra_images: extraJson })
+    } else if (type === 'prop') {
+      await propAPI.update(item.id, { local_path: extraPath, image_url: '', extra_images: extraJson })
+    } else if (type === 'scene') {
+      await sceneAPI.update(item.id, { local_path: extraPath, image_url: '', extra_images: extraJson })
+    }
+    await loadDrama()
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+  }
+}
+
+// 删除某张额外图片
+async function onRemoveExtraImage(type, item, extraPath) {
+  const extras = parseExtraImages(item).filter((p) => p !== extraPath)
+  const extraJson = extras.length ? JSON.stringify(extras) : null
+  try {
+    if (type === 'character') {
+      await characterAPI.putImage(item.id, { extra_images: extraJson })
+    } else if (type === 'prop') {
+      await propAPI.update(item.id, { extra_images: extraJson })
+    } else if (type === 'scene') {
+      await sceneAPI.update(item.id, { extra_images: extraJson })
+    }
+    await loadDrama()
+  } catch (e) {
+    ElMessage.error(e.message || '删除失败')
   }
 }
 
@@ -2417,7 +2716,7 @@ async function onAddSceneToMaterialLibrary(scene) {
 async function onGenerateCharacterImage(char) {
   char.errorMsg = ''
   char.error_msg = ''
-  generatingCharId.value = char.id
+  generatingCharIds.add(char.id)
   try {
     const res = await characterAPI.generateImage(char.id, undefined, getSelectedStyle())
     const taskId = res?.image_generation?.task_id ?? res?.task_id
@@ -2442,7 +2741,7 @@ async function onGenerateCharacterImage(char) {
     char.errorMsg = e.message || '生成失败'
     ElMessage.error(e.message || '提交失败')
   } finally {
-    generatingCharId.value = null
+    generatingCharIds.delete(char.id)
   }
 }
 
@@ -2521,7 +2820,7 @@ async function onDeleteProp(prop) {
 async function onGeneratePropImage(prop) {
   prop.errorMsg = ''
   prop.error_msg = ''
-  generatingPropId.value = prop.id
+  generatingPropIds.add(prop.id)
   try {
     const model = undefined
     const res = await propAPI.generateImage(prop.id, model, getSelectedStyle())
@@ -2547,7 +2846,7 @@ async function onGeneratePropImage(prop) {
     prop.errorMsg = e.message || '生成失败'
     ElMessage.error(e.message || '提交失败')
   } finally {
-    generatingPropId.value = null
+    generatingPropIds.delete(prop.id)
   }
 }
 
@@ -2645,7 +2944,7 @@ async function onDeleteScene(scene) {
 async function onGenerateSceneImage(scene) {
   scene.errorMsg = ''
   scene.error_msg = ''
-  generatingSceneId.value = scene.id
+  generatingSceneIds.add(scene.id)
   try {
     const res = await sceneAPI.generateImage({
       scene_id: scene.id,
@@ -2674,7 +2973,7 @@ async function onGenerateSceneImage(scene) {
     scene.errorMsg = e.message || '生成失败'
     ElMessage.error(e.message || '提交失败')
   } finally {
-    generatingSceneId.value = null
+    generatingSceneIds.delete(scene.id)
   }
 }
 
@@ -2852,6 +3151,118 @@ async function onGenerateStoryboard() {
     if (!e.response) ElMessage.error(e.message || '生成失败')
   } finally {
     storyboardGenerating.value = false
+  }
+}
+
+async function startBatchImageGeneration() {
+  if (!currentEpisodeId.value || batchImageRunning.value || pipelineRunning.value) return
+  batchImageErrors.value = []
+  batchImageStopping.value = false
+  batchImageRunning.value = true
+  try {
+    await loadStoryboardMedia()
+    const boards = store.storyboards || []
+    const todo = boards.filter((sb) => !hasSbImage(sb))
+    if (todo.length === 0) {
+      ElMessage.info('所有分镜均已有图片，无需重新生成')
+      return
+    }
+    batchImageProgress.value = { current: 0, total: todo.length, failed: 0 }
+    for (let i = 0; i < todo.length; i++) {
+      if (batchImageStopping.value) { ElMessage.info('批量生成已停止'); break }
+      batchImageProgress.value = { ...batchImageProgress.value, current: i + 1 }
+      const sb = todo[i]
+      try {
+        const res = await imagesAPI.create({
+          storyboard_id: sb.id,
+          drama_id: dramaId.value,
+          prompt: sb.image_prompt || sb.description || '',
+          style: getSelectedStyle()
+        })
+        if (res?.task_id) {
+          const pollRes = await pollTask(res.task_id, () => loadStoryboardMedia())
+          if (pollRes?.status === 'failed') {
+            batchImageErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${pollRes.error || '生成失败'}`)
+            batchImageProgress.value = { ...batchImageProgress.value, failed: batchImageProgress.value.failed + 1 }
+          }
+        } else {
+          await loadStoryboardMedia()
+        }
+      } catch (e) {
+        batchImageErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${e.message || '提交失败'}`)
+        batchImageProgress.value = { ...batchImageProgress.value, failed: batchImageProgress.value.failed + 1 }
+      }
+      if (!batchImageStopping.value) await new Promise((r) => setTimeout(r, 600))
+    }
+    if (!batchImageStopping.value) {
+      if (batchImageProgress.value.failed === 0) ElMessage.success(`分镜图批量生成完成（共 ${todo.length} 条）`)
+      else ElMessage.warning(`批量完成，${batchImageProgress.value.failed}/${todo.length} 条失败`)
+    }
+  } finally {
+    batchImageRunning.value = false
+  }
+}
+
+async function startBatchVideoGeneration() {
+  if (!currentEpisodeId.value || batchVideoRunning.value || pipelineRunning.value) return
+  batchVideoErrors.value = []
+  batchVideoStopping.value = false
+  batchVideoRunning.value = true
+  try {
+    await loadStoryboardMedia()
+    const boards = store.storyboards || []
+    // 只处理：有图片 且 还没有已完成视频 的分镜
+    const todo = boards.filter((sb) => {
+      const firstFrameUrl = getSbFirstFrameUrl(sb)
+      if (!firstFrameUrl) return false
+      const vidList = sbVideos.value[sb.id] || []
+      return !vidList.some((v) => v.status === 'completed' && (v.video_url || v.local_path))
+    })
+    if (todo.length === 0) {
+      ElMessage.info('没有需要生成视频的分镜（分镜缺少图片，或视频已全部生成）')
+      return
+    }
+    batchVideoProgress.value = { current: 0, total: todo.length, failed: 0 }
+    for (let i = 0; i < todo.length; i++) {
+      if (batchVideoStopping.value) { ElMessage.info('批量生成已停止'); break }
+      batchVideoProgress.value = { ...batchVideoProgress.value, current: i + 1 }
+      const sb = todo[i]
+      const firstFrameUrl = getSbFirstFrameUrl(sb)
+      if (!firstFrameUrl) continue
+      try {
+        const absoluteUrl = toAbsoluteImageUrl(firstFrameUrl)
+        const res = await videosAPI.create({
+          drama_id: dramaId.value,
+          storyboard_id: sb.id,
+          prompt: sb.video_prompt,
+          image_url: absoluteUrl || undefined,
+          reference_image_urls: absoluteUrl ? [absoluteUrl] : undefined,
+          style: getSelectedStyle(),
+          aspect_ratio: projectAspectRatio.value,
+          resolution: videoResolution.value || undefined,
+          duration: videoClipDuration.value || undefined,
+        })
+        if (res?.task_id) {
+          const pollRes = await pollTask(res.task_id, () => loadStoryboardMedia())
+          if (pollRes?.status === 'failed') {
+            batchVideoErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${pollRes.error || '生成失败'}`)
+            batchVideoProgress.value = { ...batchVideoProgress.value, failed: batchVideoProgress.value.failed + 1 }
+          }
+        } else {
+          await loadStoryboardMedia()
+        }
+      } catch (e) {
+        batchVideoErrors.value.push(`#${sb.storyboard_number ?? sb.id}: ${e.message || '提交失败'}`)
+        batchVideoProgress.value = { ...batchVideoProgress.value, failed: batchVideoProgress.value.failed + 1 }
+      }
+      if (!batchVideoStopping.value) await new Promise((r) => setTimeout(r, 600))
+    }
+    if (!batchVideoStopping.value) {
+      if (batchVideoProgress.value.failed === 0) ElMessage.success(`分镜视频批量生成完成（共 ${todo.length} 条）`)
+      else ElMessage.warning(`批量完成，${batchVideoProgress.value.failed}/${todo.length} 条失败`)
+    }
+  } finally {
+    batchVideoRunning.value = false
   }
 }
 
@@ -3812,6 +4223,126 @@ html.light .section-title { color: #18181b; }
   margin-bottom: 4px;
   word-break: break-all;
 }
+/* 批量生成分镜图/视频 */
+.sb-batch-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.sb-batch-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.batch-status {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.batch-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--el-text-color-primary);
+  font-weight: 500;
+}
+.batch-failed {
+  color: var(--el-color-danger);
+  font-size: 12px;
+}
+.batch-stopping {
+  color: var(--el-color-warning);
+  font-size: 12px;
+}
+.batch-error-log {
+  padding: 10px 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #fca5a5;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.batch-error-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #f87171;
+}
+.batch-error-line {
+  margin-bottom: 3px;
+  word-break: break-all;
+}
+/* 角色/场景 → 影响的分镜 */
+.asset-storyboard-link {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: rgba(99, 102, 241, 0.07);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  border-radius: 6px;
+  min-height: 28px;
+}
+.asl-label {
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.asl-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: #a5b4fc;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+}
+.asl-chip:hover {
+  background: rgba(99, 102, 241, 0.28);
+  box-shadow: 0 0 6px rgba(99, 102, 241, 0.4);
+  color: #c7d2fe;
+}
+.asl-regen-btn {
+  margin-left: auto !important;
+  flex-shrink: 0;
+  height: 22px !important;
+  padding: 0 10px !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  background: rgba(251, 146, 60, 0.15) !important;
+  border: 1px solid rgba(251, 146, 60, 0.5) !important;
+  color: #fb923c !important;
+  border-radius: 11px !important;
+  transition: background 0.15s, box-shadow 0.15s !important;
+}
+.asl-regen-btn:not(.is-loading):hover {
+  background: rgba(251, 146, 60, 0.28) !important;
+  box-shadow: 0 0 6px rgba(251, 146, 60, 0.35) !important;
+  color: #fdba74 !important;
+}
+.asl-progress {
+  font-size: 11px;
+  color: #fb923c;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
 /* 资源管理大面板 + 可折叠标题 */
 .resource-panel {
   padding: 0;
@@ -3928,12 +4459,13 @@ html.light .resource-block-title {
   white-space: pre-wrap;
   word-break: break-word;
 }
-.asset-item-left-right .asset-cover {
-  width: 200px;
-  min-width: 200px;
-  height: 200px;
+.asset-item-left-right .asset-cover-wrap {
   flex-shrink: 0;
   align-self: flex-start;
+}
+.asset-item-left-right .asset-cover {
+  width: 200px;
+  height: 200px;
 }
 .asset-item-left-right .asset-cover.asset-cover--clickable {
   cursor: pointer;
@@ -4040,7 +4572,6 @@ html.light .resource-block-title {
   word-break: break-word;
 }
 .asset-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; }
-.asset-btns .btn-upload { margin-left: 8px; }
 .asset-item-left-right .asset-name {
   display: flex;
   align-items: center;
@@ -4050,6 +4581,61 @@ html.light .resource-block-title {
 .asset-item-left-right .asset-name span { flex: 1; min-width: 0; }
 .btn-delete-icon { flex-shrink: 0; padding: 2px 4px !important; opacity: 0.45; transition: opacity 0.15s; }
 .btn-delete-icon:hover { opacity: 1; }
+/* 图片 + 操作按钮 竖向包裹 */
+.asset-cover-wrap {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 200px;
+}
+.asset-cover-actions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.asset-cover-actions .el-button { flex: 1; justify-content: center; }
+html.light .asset-cover-actions { border-top-color: rgba(139,92,246,0.1); }
+/* 额外参考图缩略图条 */
+.extra-images-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 5px 8px;
+  background: rgba(0,0,0,0.15);
+}
+.extra-thumb {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1.5px solid transparent;
+  transition: border-color 0.15s;
+}
+.extra-thumb:hover { border-color: #a78bfa; }
+.extra-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.extra-thumb-remove {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  background: rgba(239,68,68,0.85);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.extra-thumb:hover .extra-thumb-remove { opacity: 1; }
+html.light .extra-images-strip { background: rgba(139,92,246,0.05); }
 .empty-tip {
   color: #71717a;
   font-size: 0.9rem;

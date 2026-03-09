@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const aiConfigService = require('./aiConfigService');
+let sharp; try { sharp = require('sharp'); } catch (_) { sharp = null; }
 
 /**
  * 根据 provider 名推断视频接口规范（api_protocol 未设置时的兜底逻辑）
@@ -499,9 +500,9 @@ async function callSoraVideoApi(config, log, opts) {
   if (!ep.startsWith('/')) ep = '/' + ep;
   const url = base + ep;
 
-  // seconds 只允许枚举值 10 / 15 / 25（pro 才支持 25）
-  const rawSec = duration ? Number(duration) : 10;
-  const dur = rawSec <= 10 ? '10' : rawSec <= 15 ? '15' : '25';
+  // seconds 只允许枚举值 4 / 8 / 12，就近取整
+  const rawSec = duration ? Number(duration) : 4;
+  const dur = rawSec <= 4 ? '4' : rawSec <= 8 ? '8' : '12';
 
   // aspect_ratio → size（只允许 4 个固定值：720x1280 / 1280x720 / 1024x1792 / 1792x1024）
   const sizeMap = {
@@ -571,6 +572,30 @@ async function callSoraVideoApi(config, log, opts) {
     }
   }
 
+  // ── 将参考图 resize 到与 size 一致（Sora 要求尺寸完全匹配）────────
+  if (imageBuffer && sharp) {
+    try {
+      const [targetW, targetH] = size.split('x').map(Number);
+      const meta = await sharp(imageBuffer).metadata();
+      if (meta.width !== targetW || meta.height !== targetH) {
+        log.info('[Sora] 参考图尺寸不符，自动 resize', {
+          from: `${meta.width}x${meta.height}`, to: size, video_gen_id,
+        });
+        imageBuffer = await sharp(imageBuffer)
+          .resize(targetW, targetH, { fit: 'cover', position: 'centre' })
+          .jpeg({ quality: 92 })
+          .toBuffer();
+        imageMime = 'image/jpeg';
+        imageFilename = imageFilename.replace(/\.\w+$/, '.jpg');
+        log.info('[Sora] 参考图 resize 完成', { size, size_kb: Math.round(imageBuffer.length / 1024), video_gen_id });
+      } else {
+        log.info('[Sora] 参考图尺寸已匹配', { size, video_gen_id });
+      }
+    } catch (e) {
+      log.warn('[Sora] 参考图 resize 失败，使用原图', { error: e.message, video_gen_id });
+    }
+  }
+
   // ── 构造 multipart/form-data ─────────────────────────────────────
   const boundary = 'soraform_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 
@@ -611,6 +636,8 @@ async function callSoraVideoApi(config, log, opts) {
   log.info('[Sora] Video API request', {
     url, model, size, seconds: dur,
     has_image: !!imageBuffer, image_file: imageBuffer ? imageFilename : null,
+    prompt_len: (prompt || '').length,
+    prompt_head: (prompt || '').slice(0, 200),
     video_gen_id,
   });
 

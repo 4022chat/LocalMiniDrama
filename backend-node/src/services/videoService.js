@@ -125,10 +125,19 @@ async function processVideoGeneration(db, log, videoGenId) {
         if (!Array.isArray(reference_urls)) reference_urls = null;
       } catch (_) {}
     }
+    // 优先使用分镜自身的镜头时长（storyboard.duration），其次用 video_generations.duration
+    let effectiveDuration = row.duration || null;
+    if (row.storyboard_id) {
+      const sb = db.prepare('SELECT duration FROM storyboards WHERE id = ?').get(row.storyboard_id);
+      if (sb && sb.duration > 0) {
+        effectiveDuration = sb.duration;
+        log.info('使用分镜镜头时长', { storyboard_id: row.storyboard_id, duration: effectiveDuration, video_gen_id: videoGenId });
+      }
+    }
     const result = await videoClient.callVideoApi(db, log, {
       prompt: row.prompt,
       model: row.model,
-      duration: row.duration,
+      duration: effectiveDuration,
       aspect_ratio: row.aspect_ratio,
       resolution: row.resolution,
       seed: row.seed,

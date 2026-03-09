@@ -80,13 +80,18 @@ async function buildQuadGridPrompt(db, log, cfg, storyboardId, model) {
   log.info('[四宫格] 4帧提示词生成完成', { storyboard_id: storyboardId });
 
   const style = cfg?.style?.default_style || '';
-  const styleNote = style ? `, consistent art style: ${style}` : '';
-  return `Generate a 2x2 four-panel storyboard grid image (comic strip layout, clear visible borders separating panels${styleNote}). Show action sequence in order:
-Panel 1 (top-left, first frame - initial state): ${first.prompt}
-Panel 2 (top-right, key moment - action peak): ${key1.prompt}
-Panel 3 (bottom-left, key moment - continuation): ${key2.prompt}
-Panel 4 (bottom-right, last frame - final state): ${last.prompt}
-Requirements: consistent character appearance across all panels, same scene/background adapted to each moment, clear panel dividers, sequential storytelling.`;
+  const styleNote = style ? `. Art style: ${style}` : '';
+  return `Create a 2x2 grid storyboard image with EXACTLY 4 equal-sized panels arranged in 2 rows and 2 columns (like a coordinate quadrant / comic book page layout). Each panel occupies exactly one quadrant of the image. Thick visible borders separate all panels${styleNote}.
+
+TOP ROW (left to right):
+[Panel 1 - top-left quadrant, initial state]: ${first.prompt}
+[Panel 2 - top-right quadrant, key action moment]: ${key1.prompt}
+
+BOTTOM ROW (left to right):
+[Panel 3 - bottom-left quadrant, action continuation]: ${key2.prompt}
+[Panel 4 - bottom-right quadrant, final state]: ${last.prompt}
+
+CRITICAL LAYOUT RULES: The image MUST be divided into 4 equal quadrants in a 2x2 grid. Do NOT arrange panels in a single horizontal or vertical strip. The final image should look like 4 separate frames arranged in a 2-row by 2-column grid. Each panel is self-contained with consistent character appearance and art style.`;
 }
 
 /**

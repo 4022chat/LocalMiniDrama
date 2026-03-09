@@ -14,9 +14,9 @@
           返回剧集
         </el-button>
         <div class="header-actions">
-          <el-button class="btn-theme" :title="isDark ? '切换到白天模式' : '切换到暗色模式'" @click="toggleTheme">
+          <el-button class="btn-theme" :title="isDark ? '切换到浅色模式' : '切换到暗色模式'" @click="toggleTheme">
             <el-icon><Sunny v-if="isDark" /><Moon v-else /></el-icon>
-            {{ isDark ? '白天' : '暗色' }}
+            {{ isDark ? '浅色' : '暗色' }}
           </el-button>
           <el-button class="btn-ai-config" @click="showAiConfigDialog = true">
             <el-icon><Setting /></el-icon>
@@ -741,6 +741,7 @@
                 @dragleave="onSbImageDragLeave($event, sb.id)"
                 @drop="onSbImageDrop($event, sb)"
               >
+                <!-- 普通图（用户上传 / 选中的面板 / 非四宫格生成图） -->
                 <template v-if="getSbImage(sb.id)">
                   <img
                     :src="assetImageUrl(getSbImage(sb.id))"
@@ -756,6 +757,42 @@
                     alt=""
                     @click="openImagePreview(imageUrl(sb.composed_image || sb.image_url))"
                   />
+                </template>
+                <!-- 四宫格整图 + 面板选择器 -->
+                <template v-else-if="getQuadGridImage(sb.id)">
+                  <img
+                    :src="assetImageUrl(getQuadGridImage(sb.id))"
+                    class="sb-generated-img sb-quad-img"
+                    alt=""
+                    @load="triggerSplitQuadGrid(sb, getQuadGridImage(sb.id))"
+                    @click="openImagePreview(assetImageUrl(getQuadGridImage(sb.id)))"
+                  />
+                  <!-- 面板选择区 -->
+                  <div class="quad-panel-selector">
+                    <div class="quad-panel-hint">
+                      <el-icon><InfoFilled /></el-icon>
+                      点击下方格子选为主分镜图
+                    </div>
+                    <div v-if="splittingQuadIds.has(sb.id)" class="quad-panel-loading">
+                      <el-icon class="is-loading"><Loading /></el-icon>
+                      正在拆分...
+                    </div>
+                    <div v-else-if="sbQuadPanels[sb.id]" class="quad-panel-grid">
+                      <div
+                        v-for="(panelUrl, idx) in sbQuadPanels[sb.id]"
+                        :key="idx"
+                        class="quad-panel-item"
+                        :class="{ 'quad-panel-item--selecting': selectingPanelSbId === sb.id }"
+                        @click="onSelectQuadPanel(sb, idx)"
+                      >
+                        <img :src="panelUrl" class="quad-panel-thumb" alt="" />
+                        <div class="quad-panel-overlay">
+                          <el-icon v-if="selectingPanelSbId === sb.id" class="is-loading"><Loading /></el-icon>
+                          <span v-else>{{ ['左上', '右上', '左下', '右下'][idx] }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </template>
                 <template v-else-if="sb.error_msg || sb.errorMsg">
                   <div class="sb-image-error" :title="sb.error_msg || sb.errorMsg">{{ sb.error_msg || sb.errorMsg }}</div>
@@ -1046,7 +1083,7 @@
           <el-input v-model="editSceneForm.location" placeholder="如：森林、教室" />
         </el-form-item>
         <el-form-item label="时间">
-          <el-input v-model="editSceneForm.time" placeholder="如：白天、傍晚" />
+          <el-input v-model="editSceneForm.time" placeholder="如：浅色、傍晚" />
         </el-form-item>
         <el-form-item label="图生提示词">
           <el-input v-model="editSceneForm.prompt" type="textarea" :rows="3" placeholder="用于 AI 生成场景图的提示词" />
@@ -1221,7 +1258,7 @@
           <el-input v-model="editSceneLibraryForm.location" placeholder="场景地点" />
         </el-form-item>
         <el-form-item label="时间">
-          <el-input v-model="editSceneLibraryForm.time" placeholder="如：白天/夜晚" />
+          <el-input v-model="editSceneLibraryForm.time" placeholder="如：浅色/夜晚" />
         </el-form-item>
         <el-form-item label="分类">
           <el-input v-model="editSceneLibraryForm.category" placeholder="可选" />
@@ -1262,7 +1299,7 @@ import { ref, computed, onMounted, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document } from '@element-plus/icons-vue'
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document, InfoFilled, Refresh } from '@element-plus/icons-vue'
 import { useTheme } from '@/composables/useTheme'
 import { useFilmStore } from '@/stores/film'
 import { dramaAPI } from '@/api/drama'
@@ -1569,6 +1606,9 @@ const charLibraryKeyword = ref('')
 const storyboardCount = ref(null) // 分镜数量
 const videoDuration = ref(null) // 视频总长度
 const quadGridMode = ref(false) // 四宫格序列图模式
+const sbQuadPanels = ref({})        // sbId → [dataUrl1, dataUrl2, dataUrl3, dataUrl4]
+const splittingQuadIds = reactive(new Set()) // 正在拆分中的 sbId
+const selectingPanelSbId = ref(null) // 正在上传选中面板的 sbId
 const showEditCharLibrary = ref(false)
 const editCharLibraryForm = ref(null)
 const editCharLibrarySaving = ref(false)
@@ -1692,14 +1732,20 @@ function assetVideoUrl(item) {
 }
 /** 该分镜是否有图（接口拉取的或 composed_image） */
 function hasSbImage(sb) {
-  return !!(getSbImage(sb.id) || (sb && (sb.composed_image || sb.image_url)))
+  return !!(getSbImage(sb.id) || getQuadGridImage(sb.id) || (sb && (sb.composed_image || sb.image_url)))
 }
-/** 取该分镜下第一条已完成的图片记录（供展示） */
+/** 取该分镜下第一条已完成的非四宫格图片（用户上传/选中面板/普通生成） */
 function getSbImage(storyboardId) {
   const list = sbImages.value[storyboardId]
   if (!Array.isArray(list)) return null
-  const completed = list.find((i) => i.status === 'completed' && (i.image_url || i.local_path))
-  return completed || null
+  // 优先返回非四宫格图片（用户选中的面板或普通生成图）
+  return list.find((i) => i.status === 'completed' && i.frame_type !== 'quad_grid' && (i.image_url || i.local_path)) || null
+}
+/** 取该分镜下的四宫格整图记录 */
+function getQuadGridImage(storyboardId) {
+  const list = sbImages.value[storyboardId]
+  if (!Array.isArray(list)) return null
+  return list.find((i) => i.status === 'completed' && i.frame_type === 'quad_grid' && (i.image_url || i.local_path)) || null
 }
 /** 取该分镜下第一条已完成的视频记录（供展示） */
 function getSbVideo(storyboardId) {
@@ -1747,6 +1793,88 @@ async function loadStoryboardMedia() {
   sbImages.value = nextImages
   sbVideos.value = nextVideos
 }
+
+// ── 四宫格拆图与面板选择 ─────────────────────────────────────────────
+
+/** 用 Canvas 将四宫格整图拆分成 4 个象限 dataUrl */
+function splitImageIntoQuadrants(imageUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      const w = img.naturalWidth
+      const h = img.naturalHeight
+      const hw = Math.floor(w / 2)
+      const hh = Math.floor(h / 2)
+      const positions = [[0, 0], [hw, 0], [0, hh], [hw, hh]]
+      const panels = positions.map(([sx, sy]) => {
+        const canvas = document.createElement('canvas')
+        canvas.width = hw
+        canvas.height = hh
+        canvas.getContext('2d').drawImage(img, sx, sy, hw, hh, 0, 0, hw, hh)
+        return canvas.toDataURL('image/jpeg', 0.92)
+      })
+      resolve(panels)
+    }
+    img.onerror = () => reject(new Error('图片加载失败'))
+    img.src = imageUrl
+  })
+}
+
+/** 触发四宫格拆分（@load 事件调用，幂等） */
+async function triggerSplitQuadGrid(sb, quadImgRecord) {
+  if (sbQuadPanels.value[sb.id] || splittingQuadIds.has(sb.id)) return
+  splittingQuadIds.add(sb.id)
+  try {
+    const url = assetImageUrl(quadImgRecord)
+    if (!url) return
+    const panels = await splitImageIntoQuadrants(url)
+    sbQuadPanels.value = { ...sbQuadPanels.value, [sb.id]: panels }
+  } catch (e) {
+    console.warn('[四宫格] 拆分失败', e)
+  } finally {
+    splittingQuadIds.delete(sb.id)
+  }
+}
+
+/** dataUrl → Blob */
+function dataUrlToBlob(dataUrl) {
+  const [header, data] = dataUrl.split(',')
+  const mime = (header.match(/:(.*?);/) || [])[1] || 'image/jpeg'
+  const binary = atob(data)
+  const arr = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i)
+  return new Blob([arr], { type: mime })
+}
+
+/** 用户选中某个面板，上传后作为主分镜图 */
+async function onSelectQuadPanel(sb, panelIndex) {
+  if (selectingPanelSbId.value) return
+  const panels = sbQuadPanels.value[sb.id]
+  if (!panels || !panels[panelIndex]) return
+  selectingPanelSbId.value = sb.id
+  try {
+    const blob = dataUrlToBlob(panels[panelIndex])
+    const file = new File([blob], `quad_panel_${sb.id}_${panelIndex + 1}.jpg`, { type: 'image/jpeg' })
+    const uploadRes = await uploadAPI.uploadImage(file)
+    const url = uploadRes?.url || uploadRes?.path
+    if (!url) throw new Error('上传未返回地址')
+    await imagesAPI.upload({
+      storyboard_id: sb.id,
+      drama_id: dramaId.value,
+      image_url: url,
+      local_path: uploadRes?.local_path || undefined,
+    })
+    ElMessage.success(`第 ${panelIndex + 1} 格已设为主分镜图`)
+    await loadStoryboardMedia()
+  } catch (e) {
+    ElMessage.error(e.message || '设置主图失败')
+  } finally {
+    selectingPanelSbId.value = null
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
 
 async function onGenerateSbImage(sb) {
   if (!dramaId.value || !sb?.id) return
@@ -5090,6 +5218,63 @@ html.light .storyboard-row:hover {
 .sb-image-file-input { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
 .sb-gen-btn { margin-top: 4px; }
 .sb-image-area img.sb-generated-img { cursor: pointer; }
+/* 四宫格整图缩小一些，留出面板选择区空间 */
+.sb-quad-img { max-height: 180px; }
+/* 四宫格面板选择器 */
+.quad-panel-selector {
+  width: 100%;
+  margin-top: 8px;
+}
+.quad-panel-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--el-color-primary);
+  margin-bottom: 6px;
+}
+.quad-panel-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.quad-panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.quad-panel-item {
+  position: relative;
+  cursor: pointer;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  transition: border-color 0.2s;
+}
+.quad-panel-item:hover { border-color: var(--el-color-primary); }
+.quad-panel-item--selecting { pointer-events: none; opacity: 0.7; }
+.quad-panel-thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+}
+.quad-panel-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.quad-panel-item:hover .quad-panel-overlay { opacity: 1; }
 .sb-image-actions {
   display: flex;
   gap: 8px;

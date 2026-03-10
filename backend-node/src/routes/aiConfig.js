@@ -56,11 +56,12 @@ function update(db, log, cfg) {
     if (isNaN(id)) return response.badRequest(res, '无效的配置ID');
 
     let body = req.body || {};
-    // 锁定模式下只允许修改 api_key 和 default_model
+    // 锁定模式下只允许修改 api_key、default_model、is_default
     if (aiConfigService.getVendorLockStatus(cfg).enabled) {
       const allowed = {};
       if (body.api_key !== undefined) allowed.api_key = body.api_key;
       if (body.default_model !== undefined) allowed.default_model = body.default_model;
+      if (body.is_default !== undefined) allowed.is_default = body.is_default;
       body = allowed;
     }
 

@@ -294,12 +294,32 @@ async function processImageGeneration(db, log, imageGenId) {
       try {
         const loadConfig = require('../config').loadConfig;
         const cfg = loadConfig();
-        const quadPrompt = await buildQuadGridPrompt(db, log, cfg, row.storyboard_id, row.model);
+
+        // 先检查同一分镜是否已有已完成的四宫格提示词缓存
+        const cachedRow = db.prepare(
+          `SELECT prompt FROM image_generations
+            WHERE storyboard_id = ? AND frame_type = 'quad_grid'
+              AND prompt IS NOT NULL AND prompt != ''
+              AND status = 'completed'
+              AND id != ?
+            ORDER BY created_at DESC LIMIT 1`
+        ).get(Number(row.storyboard_id), imageGenId);
+
+        let quadPrompt = null;
+        if (cachedRow?.prompt) {
+          quadPrompt = cachedRow.prompt;
+          log.info('[图生] 使用缓存的四宫格提示词（跳过 AI 生成）', { id: imageGenId, prompt_len: quadPrompt.length });
+        } else {
+          quadPrompt = await buildQuadGridPrompt(db, log, cfg, row.storyboard_id, row.model);
+          if (quadPrompt) {
+            log.info('[图生] 四宫格提示词已生成（新）', { id: imageGenId, prompt_len: quadPrompt.length });
+          }
+        }
+
         if (quadPrompt) {
           db.prepare('UPDATE image_generations SET prompt = ?, updated_at = ? WHERE id = ?')
             .run(quadPrompt, new Date().toISOString(), imageGenId);
           row.prompt = quadPrompt;
-          log.info('[图生] 四宫格提示词已生成', { id: imageGenId, prompt_len: quadPrompt.length });
         }
       } catch (quadErr) {
         log.warn('[图生] 四宫格提示词生成失败，使用原始提示词', { id: imageGenId, error: quadErr.message });

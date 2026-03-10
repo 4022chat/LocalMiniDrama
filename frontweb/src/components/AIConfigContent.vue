@@ -133,6 +133,22 @@
             </el-select>
             <p class="field-tip">实际调用时使用的模型，可从预设列表中选择。</p>
           </el-form-item>
+          <el-form-item>
+            <template #label>
+              <span class="form-label-tip">设为默认
+                <el-tooltip placement="top" popper-class="cfg-tip-popper">
+                  <template #content>
+                    <div class="cfg-tip-content">
+                      每种服务类型只有一个「默认」配置。<br>
+                      生成时系统会优先使用默认配置，建议每类至少设一个默认。
+                    </div>
+                  </template>
+                  <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
+            </template>
+            <el-switch v-model="form.is_default" />
+          </el-form-item>
         </el-form>
       </template>
 
@@ -199,21 +215,7 @@
         <el-form-item v-if="form.service_type !== 'text'">
           <template #label>
             <span class="form-label-tip">接口规范
-              <el-tooltip placement="top" popper-class="cfg-tip-popper">
-                <template #content>
-                  <div class="cfg-tip-content">
-                    告诉系统该厂商使用哪种接口格式。<br>
-                    <b>预设厂商</b>选择后自动填充，无需手动设置。<br>
-                    <b>自定义/中转站</b>时请明确选择，避免走错接口。<br>
-                    · <b>OpenAI 兼容</b>：绝大多数中转站、代理服务<br>
-                    · <b>火山引擎</b>：豆包即梦系列（Seedream/Seedance）<br>
-                    · <b>通义万象</b>：阿里云 DashScope multimodal<br>
-                    · <b>Google Gemini</b>：Gemini 图片 / Veo 视频<br>
-                    · <b>NanoBanana</b>：NanoBanana 专用接口
-                  </div>
-                </template>
-                <el-icon class="tip-icon"><QuestionFilled /></el-icon>
-              </el-tooltip>
+              <el-icon class="tip-icon" style="cursor:pointer;color:#409eff" @click="showProtocolHelp = true"><QuestionFilled /></el-icon>
             </span>
           </template>
           <el-select v-model="form.api_protocol" style="width: 100%" placeholder="选择接口规范（自定义厂商必选）" clearable>
@@ -221,11 +223,146 @@
             <el-option label="火山引擎（豆包 Seedream / Seedance）" value="volcengine" />
             <el-option label="通义万象 DashScope" value="dashscope" />
             <el-option label="Google Gemini（图片 / Veo 视频）" value="gemini" />
-            <el-option label="Sora 中转站（images + orientation 格式）" value="sora" />
+            <el-option label="Sora 中转站（multipart/form-data，seconds+size）" value="sora" />
+            <el-option label="Veo3 兼容（JSON，images+enhance_prompt，自动翻译英文）" value="veo3" />
             <el-option label="Vidu 视频" value="vidu" />
             <el-option label="NanoBanana" value="nano_banana" />
           </el-select>
         </el-form-item>
+
+        <!-- 接口规范帮助 Dialog -->
+        <el-dialog v-model="showProtocolHelp" title="接口规范说明" width="700px" top="5vh">
+          <div class="protocol-help">
+            <div class="ph-section-title">🖼 图片 / 分镜图 协议</div>
+            <el-collapse accordion>
+              <el-collapse-item name="openai-img">
+                <template #title><span class="ph-tag ph-tag-img">图片</span> OpenAI 兼容 — 绝大多数中转站默认</template>
+                <div class="ph-body">
+                  <b>适用场景：</b>OpenAI 官方、各类中转/代理站（ChatFire、硅基流动等）<br>
+                  <b>Endpoint：</b><code>POST /v1/images/generations</code><br>
+                  <pre>{ "model": "dall-e-3", "prompt": "...", "n": 1, "size": "1024x1024" }</pre>
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="volcengine-img">
+                <template #title><span class="ph-tag ph-tag-img">图片</span> 火山引擎 — 豆包 Seedream</template>
+                <div class="ph-body">
+                  <b>Endpoint：</b><code>POST /api/v3/images/generations</code><br>
+                  <b>Base URL：</b><code>https://ark.cn-beijing.volces.com/api/v3</code><br>
+                  <pre>{ "model": "doubao-seedream-4-5-251128", "prompt": "...", "size": "1024x1024" }</pre>
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="dashscope-img">
+                <template #title><span class="ph-tag ph-tag-img">图片</span> 通义万象 DashScope</template>
+                <div class="ph-body">
+                  <b>Base URL：</b><code>https://dashscope.aliyuncs.com</code><br>
+                  <b>Endpoint：</b><code>POST /api/v1/services/aigc/text2image/image-synthesis</code>
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="gemini-img">
+                <template #title><span class="ph-tag ph-tag-img">图片</span> Google Gemini</template>
+                <div class="ph-body">
+                  <b>认证：</b>URL 参数 <code>?key=API_KEY</code><br>
+                  <b>Endpoint：</b><code>POST /v1beta/models/{model}:generateContent</code>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+
+            <div class="ph-section-title" style="margin-top:16px">🎬 视频 协议</div>
+            <el-collapse accordion>
+              <el-collapse-item name="openai-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> OpenAI 兼容 — content 数组格式</template>
+                <div class="ph-body">
+                  <b>适用场景：</b>各类中转站视频接口（ChatFire 等）<br>
+                  <b>Endpoint：</b>自定义，如 <code>POST /v1/video/create</code><br>
+                  <pre>{ "model": "sora-2-pro",
+  "content": [
+    { "type": "text", "text": "..." },
+    { "type": "image_url", "image_url": { "url": "https://..." }, "role": "reference_image" }
+  ],
+  "ratio": "9:16", "duration": 5, "watermark": false, "resolution": "720p" }</pre>
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="sora-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> Sora 中转站 — multipart/form-data</template>
+                <div class="ph-body">
+                  <b>适用场景：</b>Sora API 格式的中转站<br>
+                  <b>默认 Endpoint：</b><code>POST /v1/videos</code>（创建），<code>GET /v1/videos/{taskId}</code>（查询）<br>
+                  <b>请求格式：</b>multipart/form-data（非 JSON）<br>
+                  <pre>model       = "sora-2"
+prompt      = "..."
+seconds     = "4" | "8" | "12"
+size        = "720x1280" | "1280x720" | "1024x1792" | "1792x1024"
+watermark   = "false"
+private     = "false"
+input_reference = (图片文件，可选)</pre>
+                  <b>注意：</b>参考图会自动 resize 到与 size 一致后上传。
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="veo3-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> Veo3 兼容 — images + enhance_prompt</template>
+                <div class="ph-body">
+                  <b>适用场景：</b>Veo3 系列模型的 JSON 格式接口<br>
+                  <b>默认 Endpoint：</b><code>POST /v1/video/create</code>（创建），<code>GET /v1/video/query?id={taskId}</code>（查询）<br>
+                  <pre>{ "model": "veo3.1",
+  "prompt": "...",
+  "enhance_prompt": true,
+  "images": ["data:image/jpeg;base64,..."]
+}</pre>
+                  <b>注意：</b><code>enhance_prompt: true</code> 会让接口自动将提示词翻译为英文。localhost 图片会自动转为 base64 内嵌。
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="volcengine-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> 火山引擎 — 豆包 Seedance</template>
+                <div class="ph-body">
+                  <b>Endpoint：</b><code>POST /api/v3/videos/generations</code><br>
+                  <b>Base URL：</b><code>https://ark.cn-beijing.volces.com/api/v3</code><br>
+                  <pre>{ "model": "doubao-seedance-1-5-pro-251215",
+  "content": [{ "type": "text", "text": "..." }],
+  "ratio": "9:16", "duration": 5,
+  "watermark": false, "resolution": "720p" }</pre>
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="dashscope-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> 通义万象 DashScope</template>
+                <div class="ph-body">
+                  <b>Base URL：</b><code>https://dashscope.aliyuncs.com</code><br>
+                  <b>Endpoint：</b><code>POST /api/v1/services/aigc/video-generation/video-synthesis</code><br>
+                  <pre>{ "model": "wan2.2-kf2v-flash",
+  "input": { "prompt": "...", "img_url": "https://..." },
+  "parameters": { "size": "1280*720", "duration": 5 } }</pre>
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="gemini-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> Google Gemini — Veo 视频</template>
+                <div class="ph-body">
+                  <b>认证：</b>URL 参数 <code>?key=API_KEY</code><br>
+                  <b>Endpoint：</b><code>POST /v1beta/models/{model}:generateVideo</code>
+                </div>
+              </el-collapse-item>
+              <el-collapse-item name="vidu-vid">
+                <template #title><span class="ph-tag ph-tag-vid">视频</span> Vidu</template>
+                <div class="ph-body">
+                  <b>适用场景：</b>Vidu 官方及兼容接口<br>
+                  <b>认证：</b><code>Authorization: Token {api_key}</code>（非 Bearer）<br>
+                  <b>默认 Endpoint：</b><code>POST /ent/v2/img2video</code>（创建），<code>GET /ent/v2/tasks/{taskId}/creations</code>（查询）<br>
+                  <pre>{ "model": "viduq3-pro",
+  "images": ["https://..."],
+  "prompt": "...",
+  "duration": 5,
+  "resolution": "720p",
+  "movement_amplitude": "auto",
+  "audio": false,
+  "watermark": false
+}</pre>
+                  <b>注意：</b>官方 api.vidu.cn 用 <code>Token</code> 认证，中转站用 <code>Bearer</code>，系统自动识别。localhost 图片自动上传图床。
+                </div>
+              </el-collapse-item>
+            </el-collapse>
+          </div>
+          <template #footer>
+            <el-button @click="showProtocolHelp = false">关闭</el-button>
+          </template>
+        </el-dialog>
         <el-form-item prop="name">
           <template #label>
             <span class="form-label-tip">名称
@@ -531,6 +668,7 @@ const vendorLock = ref({ enabled: false, config_file: '' })
 const dialogVisible = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
+const showProtocolHelp = ref(false)
 const formRef = ref(null)
 const form = ref({
   service_type: 'text',
@@ -1242,6 +1380,55 @@ code {
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+}
+.ph-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  padding: 4px 0 6px;
+  border-bottom: 1px solid #ebeef5;
+  margin-bottom: 4px;
+}
+.ph-tag {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-right: 6px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.ph-tag-img {
+  background: #ecf5ff;
+  color: #409eff;
+  border: 1px solid #b3d8ff;
+}
+.ph-tag-vid {
+  background: #f0f9eb;
+  color: #67c23a;
+  border: 1px solid #b3e19d;
+}
+.protocol-help .ph-body {
+  font-size: 13px;
+  line-height: 1.7;
+  color: #303133;
+}
+.protocol-help .ph-body pre {
+  background: #f5f7fa;
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  margin: 6px 0 2px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.protocol-help .ph-body code {
+  background: #f0f2f5;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
 }
 .tip-icon {
   font-size: 13px;

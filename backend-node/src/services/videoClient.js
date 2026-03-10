@@ -1,11 +1,12 @@
-// 与 Go pkg/video + VideoGenerationService 对齐：调用视频生成 API，支持纯文本(无参考图)
+// ? Go pkg/video + VideoGenerationService ????????? API??????(????)
 const fs = require('fs');
 const path = require('path');
 const aiConfigService = require('./aiConfigService');
 let sharp; try { sharp = require('sharp'); } catch (_) { sharp = null; }
+const { uploadLocalImageToProxy } = require('./uploadService');
 
 /**
- * 根据 provider 名推断视频接口规范（api_protocol 未设置时的兜底逻辑）
+ * ?? provider ??????????api_protocol ??????????
  */
 function inferVideoProtocol(provider) {
   const p = String(provider || '').toLowerCase();
@@ -16,7 +17,7 @@ function inferVideoProtocol(provider) {
   return 'openai';
 }
 
-// 使用前端设置的「默认」与「优先级」：listConfigs 已按 is_default DESC, priority DESC 排序
+// ??????????????????listConfigs ?? is_default DESC, priority DESC ??
 function getDefaultVideoConfig(db, preferredModel) {
   const configs = aiConfigService.listConfigs(db, 'video');
   const active = configs.filter((c) => c.is_active);
@@ -31,7 +32,7 @@ function getDefaultVideoConfig(db, preferredModel) {
   return defaultOne != null ? defaultOne : active[0];
 }
 
-// 火山引擎视频 API 路径固定为 /contents/generations/tasks，base 读用户配置（并去掉错误子路径）
+// ?????? API ????? /contents/generations/tasks?base ???????????????
 const VOLC_VIDEO_CREATE_PATH = '/contents/generations/tasks';
 const VOLC_VIDEO_QUERY_PATH = '/contents/generations/tasks';
 
@@ -61,15 +62,16 @@ function buildQueryUrl(config, taskId) {
   const base = (config.base_url || '').replace(/\/$/, '');
   let defaultEp;
   if (isSora) defaultEp = '/v1/videos/{taskId}';
+  else if (proto === 'veo3') defaultEp = '/v1/video/query?id={taskId}';
   else if (isDashScope) defaultEp = '/api/v1/tasks/{taskId}';
   else defaultEp = '/video/task/{taskId}';
   let ep = config.query_endpoint || defaultEp;
-  ep = String(ep).replace(/{taskId}/g, encodeURIComponent(taskId)).replace(/{task_id}/g, encodeURIComponent(taskId));
+  ep = String(ep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId));
   if (!ep.startsWith('/')) ep = '/' + ep;
   return base + ep;
 }
 
-// 火山引擎常见显示名 → API 端点 ID 映射（API 只认小写+日期后缀格式）
+// ????????? ? API ?? ID ???API ????+???????
 const VOLC_MODEL_ALIASES = {
   'doubao-seedance-1.0-pro-fast':  'doubao-seedance-1-0-pro-250528',
   'doubao-seedance-1.0-pro':       'doubao-seedance-1-0-pro-250528',
@@ -92,7 +94,7 @@ function getModelFromConfig(config, preferredModel) {
   return models[0] || '';
 }
 
-// 从 DashScope 任务查询响应中取视频 URL
+// ? DashScope ?????????? URL
 function parseDashScopeVideoUrl(data) {
   const out = data?.output;
   if (!out) return null;
@@ -121,12 +123,12 @@ const DASHSCOPE_VIDEO_GENERATION = '/api/v1/services/aigc/video-generation/video
 const DASHSCOPE_IMAGE2VIDEO = '/api/v1/services/aigc/image2video/video-synthesis';
 
 /**
- * 通义万相视频：按模型选择 endpoint 与请求体，异步轮询 /api/v1/tasks/{taskId}
+ * ???????????? endpoint ????????? /api/v1/tasks/{taskId}
  * - wan2.2-kf2v-flash: image2video, first_frame_url + last_frame_url
- * - wan2.6-t2v: video-generation, 仅 prompt（文生视频）
- * - wan2.6-i2v-flash: video-generation, prompt + img_url（首帧图生视频）
- * - wanx2.1-vace-plus: video-generation, function image_reference + ref_images_url（最多 3 张）
- * - wan2.6-r2v-flash: video-generation, reference_urls（最多 5 张）
+ * - wan2.6-t2v: video-generation, ? prompt??????
+ * - wan2.6-i2v-flash: video-generation, prompt + img_url????????
+ * - wanx2.1-vace-plus: video-generation, function image_reference + ref_images_url??? 3 ??
+ * - wan2.6-r2v-flash: video-generation, reference_urls??? 5 ??
  */
 async function callDashScopeVideoApi(config, log, opts) {
   const {
@@ -155,7 +157,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     return s;
   }
 
-  /** 本地调试：若 base_url 为 localhost，从本地磁盘读取图片并转为 base64，避免 DashScope 报 download image failed */
+  /** ?????? base_url ? localhost????????????? base64??? DashScope ? download image failed */
   function toImageInput(value) {
     if (!value || !String(value).trim()) return null;
     const s = String(value).trim();
@@ -191,7 +193,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     const firstUrl = toImageInput(firstRaw);
     const lastUrl = toImageInput(lastRaw);
     if (!firstUrl || !lastUrl) {
-      return { error: 'wan2.2-kf2v-flash 需要首帧与尾帧图片' };
+      return { error: 'wan2.2-kf2v-flash ?????????' };
     }
     body = {
       model,
@@ -209,7 +211,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     url = base + DASHSCOPE_VIDEO_GENERATION;
     const imgRaw = (image_url && image_url.trim()) || (first_frame_url && first_frame_url.trim());
     const imgUrl = toImageInput(imgRaw);
-    if (!imgUrl) return { error: 'wan2.6-i2v-flash 需要首帧图片' };
+    if (!imgUrl) return { error: 'wan2.6-i2v-flash ??????' };
     body = {
       model,
       input: { prompt: prompt || '', img_url: imgUrl },
@@ -219,7 +221,7 @@ async function callDashScopeVideoApi(config, log, opts) {
     url = base + DASHSCOPE_VIDEO_GENERATION;
     const rawRefs = Array.isArray(reference_urls) ? reference_urls.filter(Boolean).slice(0, 3) : [];
     const refs = rawRefs.map(toImageInput).filter(Boolean);
-    if (refs.length === 0) return { error: 'wanx2.1-vace-plus 需要参考图（最多 3 张）' };
+    if (refs.length === 0) return { error: 'wanx2.1-vace-plus ???????? 3 ??' };
     body = {
       model,
       input: { function: 'image_reference', prompt: prompt || '', ref_images_url: refs },
@@ -229,17 +231,17 @@ async function callDashScopeVideoApi(config, log, opts) {
     url = base + DASHSCOPE_VIDEO_GENERATION;
     const rawRefs = Array.isArray(reference_urls) ? reference_urls.filter(Boolean).slice(0, 5) : [];
     const refs = rawRefs.map(toImageInput).filter(Boolean);
-    if (refs.length === 0) return { error: 'wan2.6-r2v-flash 需要参考图或视频（最多 5 个）' };
+    if (refs.length === 0) return { error: 'wan2.6-r2v-flash ??????????? 5 ??' };
     body = {
       model,
       input: { prompt: prompt || '', reference_urls: refs },
       parameters: { prompt_extend: true },
     };
   } else {
-    return { error: '不支持的通义万相视频模型: ' + model };
+    return { error: '????????????: ' + model };
   }
 
-  const shorten = (v) => (v && v.startsWith('data:') ? '(base64 本地图)' : v);
+  const shorten = (v) => (v && v.startsWith('data:') ? '(base64 ???)' : v);
   const imageUrlsInBody = body.input
     ? {
         first_frame_url: shorten(body.input.first_frame_url),
@@ -249,10 +251,10 @@ async function callDashScopeVideoApi(config, log, opts) {
         reference_urls: Array.isArray(body.input.reference_urls) ? body.input.reference_urls.map(shorten) : body.input.reference_urls,
       }
     : {};
-  log.info('DashScope 请求中的图片（base64 本地图 = 本地调试已转 base64，避免 download image failed）', {
+  log.info('DashScope ???????base64 ??? = ?????? base64??? download image failed?', {
     model,
     video_gen_id,
-    files_base_url: baseUrl || '(未配置)',
+    files_base_url: baseUrl || '(???)',
     image_urls: imageUrlsInBody,
   });
   log.info('Video API request (DashScope)', { url: url.slice(0, 70), model, video_gen_id });
@@ -267,7 +269,7 @@ async function callDashScopeVideoApi(config, log, opts) {
   });
   const raw = await res.text();
   if (!res.ok) {
-    let errMsg = '视频生成请求失败: ' + res.status;
+    let errMsg = '????????: ' + res.status;
     try {
       const errJson = JSON.parse(raw);
       if (errJson.message) errMsg += ' - ' + errJson.message;
@@ -282,22 +284,22 @@ async function callDashScopeVideoApi(config, log, opts) {
   try {
     data = JSON.parse(raw);
   } catch (e) {
-    return { error: '视频生成返回格式异常' };
+    return { error: '??????????' };
   }
   if (data.code) {
-    return { error: data.message || data.code || '通义万相接口错误' };
+    return { error: data.message || data.code || '????????' };
   }
   const taskId = data?.output?.task_id;
   if (taskId) return { task_id: taskId, status: 'PENDING' };
   const videoUrl = parseDashScopeVideoUrl(data);
   if (videoUrl) return { video_url: videoUrl };
-  return { error: '未返回 task_id 或 video_url' };
+  return { error: '??? task_id ? video_url' };
 }
 
 /**
- * 调用 Google Gemini Veo 视频生成 API（predictLongRunning 长运行任务）
- * 支持模型：veo-3.1-generate-preview / veo-3.0-generate-preview / veo-3.0-fast-generate-preview
- * 支持 t2v（纯文本）和 i2v（图片转视频）
+ * ?? Google Gemini Veo ???? API?predictLongRunning ??????
+ * ?????veo-3.1-generate-preview / veo-3.0-generate-preview / veo-3.0-fast-generate-preview
+ * ?? t2v?????? i2v???????
  */
 async function callGeminiVideoApi(config, log, opts) {
   const { prompt, duration, aspect_ratio, image_url, video_gen_id, files_base_url, storage_local_path, model } = opts;
@@ -305,13 +307,13 @@ async function callGeminiVideoApi(config, log, opts) {
   const base = (config.base_url || 'https://generativelanguage.googleapis.com').replace(/\/$/, '');
   const modelName = model || 'veo-3.0-generate-preview';
 
-  // durationSeconds 限制在 5-8 秒
+  // durationSeconds ??? 5-8 ?
   const durationSec = Math.min(8, Math.max(5, Math.round(Number(duration) || 8)));
   const ratio = aspect_ratio || '16:9';
 
   const instance = { prompt: prompt || '' };
 
-  // i2v：将图片转为 base64（Gemini 不支持 localhost URL，需本地读文件或 fetch 公网 URL）
+  // i2v?????? base64?Gemini ??? localhost URL???????? fetch ?? URL?
   if (image_url && image_url.trim()) {
     let imageB64 = null;
     let mimeType = 'image/jpeg';
@@ -372,7 +374,7 @@ async function callGeminiVideoApi(config, log, opts) {
   });
   const raw = await res.text();
   if (!res.ok) {
-    let errMsg = 'Gemini 视频生成请求失败: ' + res.status;
+    let errMsg = 'Gemini ????????: ' + res.status;
     try {
       const errJson = JSON.parse(raw);
       const msg = errJson.error?.message || errJson.message;
@@ -388,109 +390,226 @@ async function callGeminiVideoApi(config, log, opts) {
   try {
     data = JSON.parse(raw);
   } catch (e) {
-    return { error: 'Gemini 视频生成返回格式异常' };
+    return { error: 'Gemini ??????????' };
   }
 
-  // 返回 operation name 作为 task_id，后续由 pollVideoTask 轮询
+  // ?? operation name ?? task_id???? pollVideoTask ??
   const operationName = data.name;
   if (operationName) {
     log.info('Gemini Video task created', { operation: operationName, video_gen_id });
     return { task_id: operationName, status: 'processing' };
   }
-  return { error: 'Gemini 未返回 operation name，请检查 API Key 或模型权限' };
+  return { error: 'Gemini ??? operation name???? API Key ?????' };
 }
 
 /**
- * 调用 Vidu 视频生成 API（官方 api.vidu.cn/ent/v2）
- * 认证：Authorization: Token {api_key}（非 Bearer）
- * 创建：POST /ent/v2/tasks
- * 轮询：GET /ent/v2/tasks/{id}/creations
- * 支持模型：viduq2 / viduq2-pro / viduq2-turbo / viduq3-pro
+ * ?? Vidu ???? API??? api.vidu.cn/ent/v2?
+ * ???Authorization: Token {api_key}?? Bearer?
+ * ???POST /ent/v2/tasks
+ * ???GET /ent/v2/tasks/{id}/creations
+ * ?????viduq2 / viduq2-pro / viduq2-turbo / viduq3-pro
  */
 async function callViduVideoApi(config, log, opts) {
   const { prompt, model, duration, aspect_ratio, image_url, video_gen_id, files_base_url, storage_local_path } = opts;
   const apiKey = config.api_key || '';
   const base = (config.base_url || 'https://api.vidu.cn').replace(/\/$/, '');
   const modelName = model || 'viduq2';
-
-  // 时长：Vidu 支持 1-10 秒，默认 5
   const dur = Math.min(10, Math.max(1, Math.round(Number(duration) || 5)));
-  // 画面比例：Vidu 支持 16:9 / 9:16 / 1:1 / 4:3 / 3:4
   const ratio = aspect_ratio || '16:9';
-
   const hasImage = !!(image_url && image_url.trim());
-  const taskType = hasImage ? 'i2v' : 't2v';
 
-  // 构建 prompts 数组
-  const prompts = [{ type: 'text', content: prompt || '' }];
+  // ?? api.vidu.cn: Token ??????: Bearer ??
+  const isOfficialVidu = /api\.vidu\.cn/i.test(base);
+  const authHeader = (isOfficialVidu ? 'Token ' : 'Bearer ') + apiKey;
 
-  if (hasImage) {
-    let imgUrl = image_url.trim();
-    // localhost 图片转为公网可访问 URL（Vidu 服务器需要能下载图片）
-    if (/localhost|127\.0\.0\.1/i.test(imgUrl) && files_base_url && !/localhost|127/.test(files_base_url)) {
-      const baseUrl = (files_base_url || '').replace(/\/$/, '');
-      imgUrl = baseUrl + '/' + imgUrl.replace(/^.*?\/static\//, '');
-    }
-    prompts.push({ type: 'image', url: imgUrl });
-  }
+  // ????????? /ent/v2/img2video ?????????
+  const defaultEp = hasImage ? '/ent/v2/img2video' : '/ent/v2/text2video';
+  let ep = config.endpoint || defaultEp;
+  if (!ep.startsWith('/')) ep = '/' + ep;
+  const url = base + ep;
 
   const body = {
-    type: taskType,
     model: modelName,
-    input: {
-      seed: -1,
-      prompts,
-      duration: dur,
-      aspect_ratio: ratio,
-      resolution: '720p',
-      movement_amplitude: 'auto',
-    },
+    prompt: prompt || '',
+    duration: dur,
+    resolution: '720p',
+    aspect_ratio: ratio,
+    movement_amplitude: 'auto',
+    audio: false,
+    off_peak: false,
+    watermark: false,
   };
 
-  const url = `${base}/ent/v2/tasks`;
-  log.info('Vidu Video API request', { url: url.slice(0, 70), model: modelName, taskType, dur, ratio, video_gen_id });
+  // ????localhost ? ??????? URL
+  if (hasImage) {
+    const rawImgUrl = image_url.trim();
+    let publicImgUrl = null;
+    if (/localhost|127\.0\.0\.1/i.test(rawImgUrl)) {
+      log.info('[Vidu] ???? localhost???????', { original: rawImgUrl, video_gen_id });
+      publicImgUrl = await uploadLocalImageToProxy(storage_local_path, rawImgUrl, log, `vidu_vg${video_gen_id}`);
+      if (publicImgUrl) {
+        log.info('[Vidu] ????????', { proxy: publicImgUrl, video_gen_id });
+      } else if (files_base_url && !/localhost|127\.0\.0\.1/i.test(files_base_url)) {
+        publicImgUrl = (files_base_url || '').replace(/\/$/, '') + rawImgUrl.replace(/^https?:\/\/[^/]+/, '');
+        log.warn('[Vidu] ????????? files_base_url', { converted: publicImgUrl, video_gen_id });
+      } else {
+        log.warn('[Vidu] ???????? URL??????', { video_gen_id });
+      }
+    } else {
+      publicImgUrl = rawImgUrl;
+    }
+    if (publicImgUrl) body.images = [publicImgUrl];
+  }
+
+  log.info('[Vidu] Video API request', {
+    url, model: modelName, auth: isOfficialVidu ? 'Token' : 'Bearer',
+    dur, has_image: !!body.images, video_gen_id,
+  });
+  log.info('[Vidu] request body', { body: JSON.stringify({ ...body, images: body.images ? ['(url)'] : undefined }), video_gen_id });
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: 'Token ' + apiKey,
-    },
+    headers: { 'Content-Type': 'application/json', Authorization: authHeader },
     body: JSON.stringify(body),
   });
   const raw = await res.text();
+  log.info('[Vidu] raw response', { status: res.status, raw: raw.slice(0, 600), video_gen_id });
+
   if (!res.ok) {
-    let errMsg = 'Vidu 视频生成请求失败: ' + res.status;
+    let errMsg = 'Vidu request failed: ' + res.status;
     try {
       const errJson = JSON.parse(raw);
-      const msg = errJson.message || errJson.err_code || errJson.error;
+      const msg = errJson.message || errJson.err_code || errJson.error?.message || errJson.error;
       if (msg) errMsg += ' - ' + String(msg).slice(0, 200);
     } catch (_) {
       if (raw) errMsg += ' - ' + raw.slice(0, 200);
     }
-    log.error('Vidu Video API failed', { status: res.status, body: raw.slice(0, 300), video_gen_id });
+    log.error('[Vidu] Video API failed', { status: res.status, body: raw.slice(0, 300), video_gen_id });
     return { error: errMsg };
   }
 
   let data;
   try { data = JSON.parse(raw); } catch (_) {
-    return { error: 'Vidu 视频生成返回格式异常' };
+    return { error: 'Vidu bad response: ' + raw.slice(0, 200) };
   }
 
-  const taskId = data?.id || data?.task_id;
+  const taskId = data?.task_id || data?.id;
   if (!taskId) {
-    log.error('Vidu Video API: no task id', { video_gen_id, raw: raw.slice(0, 300) });
-    return { error: 'Vidu 未返回 task_id' };
+    log.error('[Vidu] no task_id in response', { video_gen_id, raw: raw.slice(0, 300) });
+    return { error: 'Vidu no task_id returned' };
   }
-  log.info('Vidu Video task created', { task_id: taskId, state: data?.state, video_gen_id });
+  log.info('[Vidu] task created', { task_id: taskId, state: data?.state, video_gen_id });
   return { task_id: taskId, status: data?.state || 'created' };
 }
 
 /**
- * Sora 兼容中转站（api_protocol = 'sora'）
- * body 格式：{ model, prompt, images:[url], orientation, size, duration, watermark }
- * orientation: portrait(9:16) | landscape(16:9) | square(1:1)
- * size: large | medium | small（可在配置 resolution 字段中填写，默认 large）
+ * Veo3 (api_protocol = 'veo3')
+ * body: { model, prompt, enhance_prompt: true, images: [base64 or url] }
+ * endpoint default: /v1/video/create
+ */
+async function callVeo3VideoApi(config, log, opts) {
+  const { prompt, model, image_url, storage_local_path, video_gen_id } = opts;
+
+  const base = (config.base_url || '').replace(/\/$/, '');
+  let ep = config.endpoint || '/v1/video/create';
+  if (!ep.startsWith('/')) ep = '/' + ep;
+  const url = base + ep;
+
+  const body = {
+    model: model || '',
+    prompt: prompt || '',
+    enhance_prompt: true,
+  };
+
+  const rawImgUrl = (image_url || '').trim();
+  if (rawImgUrl) {
+    let imageData = null;
+    if (rawImgUrl.startsWith('data:')) {
+      imageData = rawImgUrl;
+    } else if (/localhost|127\.0\.0\.1/i.test(rawImgUrl)) {
+      try {
+        const afterStatic = rawImgUrl.split('/static/')[1];
+        if (afterStatic && storage_local_path) {
+          const localFile = path.join(storage_local_path, afterStatic.replace(/^\//, ''));
+          if (fs.existsSync(localFile)) {
+            const buf = fs.readFileSync(localFile);
+            const ext = path.extname(localFile).toLowerCase();
+            const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' }[ext] || 'image/jpeg';
+            imageData = `data:${mime};base64,${buf.toString('base64')}`;
+            log.info('[Veo3] local image -> base64', { file: localFile, size_kb: Math.round(buf.length / 1024), video_gen_id });
+          } else {
+            log.warn('[Veo3] local image not found', { file: localFile, video_gen_id });
+          }
+        }
+      } catch (e) {
+        log.warn('[Veo3] read local image failed', { error: e.message, video_gen_id });
+      }
+    } else {
+      imageData = rawImgUrl;
+    }
+    if (imageData) body.images = [imageData];
+  }
+
+  log.info('[Veo3] Video API request', {
+    url, model,
+    has_image: !!body.images,
+    prompt_len: (prompt || '').length,
+    prompt_head: (prompt || '').slice(0, 200),
+    video_gen_id,
+  });
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer ' + (config.api_key || ''),
+    },
+    body: JSON.stringify(body),
+  });
+  const raw = await res.text();
+  log.info('[Veo3] raw response', { status: res.status, raw: raw.slice(0, 1000), video_gen_id });
+
+  if (!res.ok) {
+    let errMsg = 'Veo3 request failed: ' + res.status;
+    try {
+      const errJson = JSON.parse(raw);
+      const msg = errJson.error?.message || errJson.message || errJson.error;
+      if (msg) errMsg += ' - ' + (typeof msg === 'string' ? msg : JSON.stringify(msg).slice(0, 200));
+    } catch (_) {
+      if (raw) errMsg += ' - ' + raw.slice(0, 200);
+    }
+    return { error: errMsg };
+  }
+
+  let data;
+  try { data = JSON.parse(raw); } catch (e) {
+    return { error: 'Veo3 bad response: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
+  }
+
+  const directUrl =
+    data.video_url || data.url ||
+    data.data?.video_url || data.data?.url ||
+    data.result?.url || data.result?.video_url ||
+    (Array.isArray(data.videos) && data.videos[0]?.url) ||
+    (Array.isArray(data.data) && data.data[0]?.url);
+  if (directUrl) {
+    log.info('[Veo3] direct video URL', { video_url: directUrl, video_gen_id });
+    return { video_url: directUrl };
+  }
+
+  const taskId = data.task_id || data.id || data.request_id || data.data?.task_id || data.data?.id;
+  if (taskId) {
+    log.info('[Veo3] task ID returned', { task_id: taskId, status: data.status, video_gen_id });
+    return { task_id: String(taskId), status: data.status || 'processing' };
+  }
+
+  log.error('[Veo3] cannot parse task_id or video_url', { data: JSON.stringify(data).slice(0, 500), video_gen_id });
+  return { error: 'Veo3 no task_id or video_url: ' + JSON.stringify(data).slice(0, 300) };
+}
+
+/**
+ * Sora (api_protocol = 'sora')
+ * multipart/form-data: model, prompt, seconds, size, input_reference
  */
 async function callSoraVideoApi(config, log, opts) {
   const { prompt, model, duration, aspect_ratio, image_url, storage_local_path, video_gen_id } = opts;
@@ -500,22 +619,22 @@ async function callSoraVideoApi(config, log, opts) {
   if (!ep.startsWith('/')) ep = '/' + ep;
   const url = base + ep;
 
-  // seconds 只允许枚举值 4 / 8 / 12，就近取整
+  // seconds ?????? 4 / 8 / 12?????
   const rawSec = duration ? Number(duration) : 4;
   const dur = rawSec <= 4 ? '4' : rawSec <= 8 ? '8' : '12';
 
-  // aspect_ratio → size（只允许 4 个固定值：720x1280 / 1280x720 / 1024x1792 / 1792x1024）
+  // aspect_ratio ? size???? 4 ?????720x1280 / 1280x720 / 1024x1792 / 1792x1024?
   const sizeMap = {
-    '9:16': '720x1280',  // 竖屏标准
-    '3:4':  '1024x1792', // 竖屏高清
-    '1:1':  '720x1280',  // 正方形用竖屏默认
-    '16:9': '1280x720',  // 横屏标准
-    '4:3':  '1280x720',  // 横屏标准
-    '21:9': '1792x1024', // 横屏高清
+    '9:16': '720x1280',  // ????
+    '3:4':  '1024x1792', // ????
+    '1:1':  '720x1280',  // ????????
+    '16:9': '1280x720',  // ????
+    '4:3':  '1280x720',  // ????
+    '21:9': '1792x1024', // ????
   };
   const size = sizeMap[aspect_ratio || ''] || '720x1280';
 
-  // ── 读取参考图 Buffer ────────────────────────────────────────────
+  // ?? ????? Buffer ????????????????????????????????????????????
   let imageBuffer = null;
   let imageMime = 'image/jpeg';
   let imageFilename = 'reference.jpg';
@@ -530,10 +649,10 @@ async function callSoraVideoApi(config, log, opts) {
         const ext = imageMime.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
         imageFilename = `reference.${ext}`;
       } else {
-        log.warn('[Sora] 无法解析 base64 参考图，跳过', { video_gen_id });
+        log.warn('[Sora] ???? base64 ??????', { video_gen_id });
       }
     } else if (/localhost|127\.0\.0\.1/i.test(rawImgUrl)) {
-      // localhost URL → 从本地磁盘直接读取
+      // localhost URL ? ?????????
       try {
         const afterStatic = rawImgUrl.split('/static/')[1];
         if (afterStatic && storage_local_path) {
@@ -544,16 +663,16 @@ async function callSoraVideoApi(config, log, opts) {
             const mimeMap = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
             imageMime = mimeMap[ext] || 'image/jpeg';
             imageFilename = path.basename(localFile);
-            log.info('[Sora] 本地参考图已读取', { file: localFile, size_kb: Math.round(imageBuffer.length / 1024), video_gen_id });
+            log.info('[Sora] ????????', { file: localFile, size_kb: Math.round(imageBuffer.length / 1024), video_gen_id });
           } else {
-            log.warn('[Sora] 本地参考图文件不存在', { file: localFile, video_gen_id });
+            log.warn('[Sora] ??????????', { file: localFile, video_gen_id });
           }
         }
       } catch (e) {
-        log.warn('[Sora] 读取本地参考图失败', { error: e.message, video_gen_id });
+        log.warn('[Sora] ?????????', { error: e.message, video_gen_id });
       }
     } else {
-      // 远程 URL → 下载
+      // ?? URL ? ??
       try {
         const dlRes = await fetch(rawImgUrl);
         if (dlRes.ok) {
@@ -562,23 +681,23 @@ async function callSoraVideoApi(config, log, opts) {
           imageBuffer = Buffer.from(await dlRes.arrayBuffer());
           const ext = imageMime.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
           imageFilename = `reference.${ext}`;
-          log.info('[Sora] 远程参考图已下载', { url: rawImgUrl, size_kb: Math.round(imageBuffer.length / 1024), video_gen_id });
+          log.info('[Sora] ????????', { url: rawImgUrl, size_kb: Math.round(imageBuffer.length / 1024), video_gen_id });
         } else {
-          log.warn('[Sora] 下载远程参考图失败', { status: dlRes.status, url: rawImgUrl, video_gen_id });
+          log.warn('[Sora] ?????????', { status: dlRes.status, url: rawImgUrl, video_gen_id });
         }
       } catch (e) {
-        log.warn('[Sora] 下载远程参考图异常', { error: e.message, video_gen_id });
+        log.warn('[Sora] ?????????', { error: e.message, video_gen_id });
       }
     }
   }
 
-  // ── 将参考图 resize 到与 size 一致（Sora 要求尺寸完全匹配）────────
+  // ?? ???? resize ?? size ???Sora ?????????????????
   if (imageBuffer && sharp) {
     try {
       const [targetW, targetH] = size.split('x').map(Number);
       const meta = await sharp(imageBuffer).metadata();
       if (meta.width !== targetW || meta.height !== targetH) {
-        log.info('[Sora] 参考图尺寸不符，自动 resize', {
+        log.info('[Sora] ?????????? resize', {
           from: `${meta.width}x${meta.height}`, to: size, video_gen_id,
         });
         imageBuffer = await sharp(imageBuffer)
@@ -587,16 +706,16 @@ async function callSoraVideoApi(config, log, opts) {
           .toBuffer();
         imageMime = 'image/jpeg';
         imageFilename = imageFilename.replace(/\.\w+$/, '.jpg');
-        log.info('[Sora] 参考图 resize 完成', { size, size_kb: Math.round(imageBuffer.length / 1024), video_gen_id });
+        log.info('[Sora] ??? resize ??', { size, size_kb: Math.round(imageBuffer.length / 1024), video_gen_id });
       } else {
-        log.info('[Sora] 参考图尺寸已匹配', { size, video_gen_id });
+        log.info('[Sora] ????????', { size, video_gen_id });
       }
     } catch (e) {
-      log.warn('[Sora] 参考图 resize 失败，使用原图', { error: e.message, video_gen_id });
+      log.warn('[Sora] ??? resize ???????', { error: e.message, video_gen_id });
     }
   }
 
-  // ── 构造 multipart/form-data ─────────────────────────────────────
+  // ?? ?? multipart/form-data ?????????????????????????????????????
   const boundary = 'soraform_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 
   const textFields = [
@@ -653,7 +772,7 @@ async function callSoraVideoApi(config, log, opts) {
   log.info('[Sora] raw response', { status: res.status, raw: raw.slice(0, 1000), video_gen_id });
 
   if (!res.ok) {
-    let errMsg = 'Sora 视频生成请求失败: ' + res.status;
+    let errMsg = 'Sora ????????: ' + res.status;
     try {
       const errJson = JSON.parse(raw);
       const msg = errJson.error?.message || errJson.message || errJson.error;
@@ -666,10 +785,10 @@ async function callSoraVideoApi(config, log, opts) {
 
   let data;
   try { data = JSON.parse(raw); } catch (e) {
-    return { error: 'Sora 返回格式异常: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
+    return { error: 'Sora ??????: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
   }
 
-  // 直接返回视频 URL
+  // ?????? URL
   const directUrl =
     data.video_url || data.url ||
     data.data?.video_url || data.data?.url ||
@@ -677,34 +796,34 @@ async function callSoraVideoApi(config, log, opts) {
     (Array.isArray(data.generations) && data.generations[0]?.url) ||
     (Array.isArray(data.data) && data.data[0]?.url);
   if (directUrl) {
-    log.info('[Sora] 直接返回视频 URL', { video_url: directUrl, video_gen_id });
+    log.info('[Sora] ?????? URL', { video_url: directUrl, video_gen_id });
     return { video_url: directUrl };
   }
 
-  // 异步任务 ID
+  // ???? ID
   const taskId = data.id || data.task_id || data.request_id || data.data?.id || data.data?.task_id;
   if (taskId) {
-    log.info('[Sora] 返回任务 ID', { task_id: taskId, status: data.status, video_gen_id });
+    log.info('[Sora] ???? ID', { task_id: taskId, status: data.status, video_gen_id });
     return { task_id: String(taskId), status: data.status || 'processing' };
   }
 
-  log.error('[Sora] 未能解析 task_id 或 video_url', { data: JSON.stringify(data).slice(0, 500), video_gen_id });
-  return { error: 'Sora 未返回 task_id 或 video_url，响应: ' + JSON.stringify(data).slice(0, 300) };
+  log.error('[Sora] ???? task_id ? video_url', { data: JSON.stringify(data).slice(0, 500), video_gen_id });
+  return { error: 'Sora ??? task_id ? video_url???: ' + JSON.stringify(data).slice(0, 300) };
 }
 
 /**
- * 调用视频生成 API（ChatFire/豆包 或 通义万相）
+ * ?????? API?ChatFire/?? ? ?????
  * @returns {Promise<{ task_id?: string, video_url?: string, error?: string }>}
  */
 async function callVideoApi(db, log, opts) {
   const { prompt, model: preferredModel, duration, aspect_ratio, resolution, seed, camera_fixed, watermark, image_url, video_gen_id } = opts;
   const config = getDefaultVideoConfig(db, preferredModel);
   if (!config) {
-    throw new Error('未配置视频模型，请在「AI 配置」中添加 video 类型且已启用的配置');
+    throw new Error('???????????AI ?????? video ?????????');
   }
   const model = getModelFromConfig(config, preferredModel);
   const provider = (config.provider || '').toLowerCase();
-  // api_protocol 显式指定接口规范，优先级高于 provider 推断
+  // api_protocol ?????????????? provider ??
   const protocol = (config.api_protocol || '').toLowerCase() || inferVideoProtocol(provider);
 
   if (protocol === 'dashscope') {
@@ -746,8 +865,17 @@ async function callVideoApi(db, log, opts) {
     });
   }
 
-  // ── Sora 式中转站协议（api_protocol = 'sora'）─────────────────────
-  // body 格式：{ model, prompt, images:[url], orientation, size, duration, watermark }
+  // Veo3 protocol (api_protocol = 'veo3')
+  if (protocol === 'veo3') {
+    return callVeo3VideoApi(config, log, {
+      prompt, model,
+      image_url: opts.image_url,
+      storage_local_path: opts.storage_local_path,
+      video_gen_id: opts.video_gen_id,
+    });
+  }
+
+  // Sora protocol (api_protocol = 'sora')
   if (protocol === 'sora') {
     return callSoraVideoApi(config, log, {
       prompt, model,
@@ -766,13 +894,13 @@ async function callVideoApi(db, log, opts) {
   const ratio = aspect_ratio || '16:9';
 
   const isVolc = protocol === 'volcengine';
-  // 火山引擎 model 名称标准化（把显示名转成 API 端点 ID）
+  // ???? model ???????????? API ?? ID?
   const finalModel = isVolc ? normalizeVolcModel(model) : model;
   const hasImage = !!(image_url && image_url.trim());
-  // 火山引擎：doubao-seedance-1-5-pro 不支持 r2v，必须显式传 task_type；单图用 i2v 且不用 reference_image 避免被识别为 r2v
+  // ?????doubao-seedance-1-5-pro ??? r2v?????? task_type???? i2v ??? reference_image ?????? r2v
   const volcTaskType = isVolc ? (hasImage ? 'i2v' : 't2v') : null;
 
-  // 若图片为 localhost URL，火山服务器无法下载，转为 base64（与 DashScope 一致）
+  // ???? localhost URL????????????? base64?? DashScope ???
   let imageUrlForApi = image_url && image_url.trim();
   if (hasImage && imageUrlForApi && (opts.files_base_url || '').match(/localhost|127\.0\.0\.1/i) && opts.storage_local_path) {
     const baseUrl = (opts.files_base_url || '').replace(/\/$/, '');
@@ -791,7 +919,7 @@ async function callVideoApi(db, log, opts) {
     }
   }
 
-  // ratio、duration 等作为独立顶层字段传入（火山引擎/ChatFire 官方接口格式）
+  // ratio?duration ????????????????/ChatFire ???????
   const body = {
     model: finalModel,
     content: [{ type: 'text', text: prompt || '' }],
@@ -828,7 +956,7 @@ async function callVideoApi(db, log, opts) {
   log.info('Video API raw response', { video_gen_id, status: res.status, raw: raw.slice(0, 1000) });
   if (!res.ok) {
     log.error('Video API failed', { status: res.status, body: raw.slice(0, 500) });
-    let errMsg = '视频生成请求失败: ' + res.status;
+    let errMsg = '????????: ' + res.status;
     try {
       const errJson = JSON.parse(raw);
       const msg = errJson.error?.message || errJson.message || errJson.error;
@@ -843,7 +971,7 @@ async function callVideoApi(db, log, opts) {
     data = JSON.parse(raw);
   } catch (e) {
     log.error('Video API response JSON parse failed', { video_gen_id, raw: raw.slice(0, 1000), parse_error: e.message });
-    return { error: '视频生成返回格式异常: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
+    return { error: '??????????: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
   }
   log.info('Video API parsed response', { video_gen_id, data: JSON.stringify(data).slice(0, 500) });
   const taskId = data.id || data.task_id || (data.data && data.data.id);
@@ -858,11 +986,11 @@ async function callVideoApi(db, log, opts) {
     return { task_id: taskId, status: status || 'processing' };
   }
   log.error('Video API: no task_id or video_url in response', { video_gen_id, data: JSON.stringify(data).slice(0, 500) });
-  return { error: '未返回 task_id 或 video_url，完整响应: ' + JSON.stringify(data).slice(0, 300) };
+  return { error: '??? task_id ? video_url?????: ' + JSON.stringify(data).slice(0, 300) };
 }
 
 /**
- * 轮询任务状态直到完成或失败（兼容豆包/ChatFire 与 通义万相 DashScope）
+ * ??????????????????/ChatFire ? ???? DashScope?
  */
 async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 300, intervalMs = 10000) {
   const provider = (config.provider || '').toLowerCase();
@@ -871,8 +999,9 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
   const isGemini = protocol === 'gemini';
   const isVidu = protocol === 'vidu';
   const isSora = protocol === 'sora';
+  const isVeo3 = protocol === 'veo3';
   const queryUrl = () => buildQueryUrl(config, taskId);
-  log.info('[poll] 开始轮询', { video_gen_id: videoGenId, task_id: taskId, protocol, poll_url: queryUrl() });
+  log.info('[poll] ????', { video_gen_id: videoGenId, task_id: taskId, protocol, poll_url: queryUrl() });
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     await new Promise((r) => setTimeout(r, intervalMs));
     try {
@@ -882,33 +1011,62 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         url = `${base}/v1beta/${taskId}`;
         headers = { 'x-goog-api-key': config.api_key || '' };
       } else if (isVidu) {
-        // Vidu 轮询：GET /ent/v2/tasks/{id}/creations
-        const base = (config.base_url || 'https://api.vidu.cn').replace(/\/$/, '');
-        url = `${base}/ent/v2/tasks/${encodeURIComponent(taskId)}/creations`;
-        headers = { Authorization: 'Token ' + (config.api_key || '') };
+        const viduBase = (config.base_url || 'https://api.vidu.cn').replace(/\/$/, '');
+        const isOfficialVidu = /api\.vidu\.cn/i.test(viduBase);
+        const defaultQep = isOfficialVidu ? '/ent/v2/tasks/{taskId}/creations' : '/ent/v2/tasks/{taskId}/creations';
+        let qep = config.query_endpoint || defaultQep;
+        qep = String(qep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId));
+        if (!qep.startsWith('/')) qep = '/' + qep;
+        url = viduBase + qep;
+        headers = { Authorization: (isOfficialVidu ? 'Token ' : 'Bearer ') + (config.api_key || '') };
       } else {
         url = queryUrl();
         headers = { Authorization: 'Bearer ' + (config.api_key || '') };
       }
-      log.info('[poll] 发起轮询请求', { video_gen_id: videoGenId, attempt, url });
+      log.info('[poll] ??????', { video_gen_id: videoGenId, attempt, url });
       const res = await fetch(url, { method: 'GET', headers });
       const raw = await res.text();
-      log.info('[poll] 轮询响应', { video_gen_id: videoGenId, attempt, status: res.status, raw: raw.slice(0, 600) });
+      log.info('[poll] ????', { video_gen_id: videoGenId, attempt, status: res.status, raw: raw.slice(0, 600) });
       if (!res.ok) {
-        log.warn('[poll] 轮询失败 (non-200)', { video_gen_id: videoGenId, attempt, status: res.status, raw: raw.slice(0, 300) });
+        log.warn('[poll] ???? (non-200)', { video_gen_id: videoGenId, attempt, status: res.status, raw: raw.slice(0, 300) });
         continue;
       }
       const data = JSON.parse(raw);
 
-      if (isSora) {
-        const status = (data.status || '').toLowerCase();
-        log.info('[Sora poll] 任务状态', { video_gen_id: videoGenId, attempt, status, progress: data.progress, id: data.id });
+      if (isVeo3) {
+        const status = (data.status || data.data?.status || data.task_status || '').toLowerCase();
+        log.info('[Veo3 poll] task status', { video_gen_id: videoGenId, attempt, status, id: data.task_id || data.id });
         if (status === 'failed' || status === 'error') {
-          const msg = data.error?.message || data.error || data.message || 'Sora 视频任务失败';
-          log.warn('[Sora poll] 任务失败', { video_gen_id: videoGenId, msg, data: JSON.stringify(data).slice(0, 300) });
+          const msg = data.error?.message || data.error || data.message || data.data?.error || 'Veo3 task failed';
+          log.warn('[Veo3 poll] task failed', { video_gen_id: videoGenId, msg });
           return { error: String(msg) };
         }
-        // succeeded / completed / done → 取视频 URL
+        const videoUrl =
+          data.video_url || data.url || data.output_url ||
+          data.data?.video_url || data.data?.url ||
+          data.result?.url || data.result?.video_url ||
+          (Array.isArray(data.videos) && data.videos[0]?.url) ||
+          (Array.isArray(data.works) && data.works[0]?.resource?.resource);
+        if (videoUrl) {
+          log.info('[Veo3 poll] video completed', { video_gen_id: videoGenId, video_url: videoUrl });
+          return { video_url: videoUrl };
+        }
+        if (status === 'succeeded' || status === 'completed' || status === 'done') {
+          log.warn('[Veo3 poll] completed but no video_url', { data: JSON.stringify(data).slice(0, 500) });
+          return { error: 'Veo3 completed but no video URL: ' + JSON.stringify(data).slice(0, 300) };
+        }
+        continue;
+      }
+
+      if (isSora) {
+        const status = (data.status || '').toLowerCase();
+        log.info('[Sora poll] ????', { video_gen_id: videoGenId, attempt, status, progress: data.progress, id: data.id });
+        if (status === 'failed' || status === 'error') {
+          const msg = data.error?.message || data.error || data.message || 'Sora ??????';
+          log.warn('[Sora poll] ????', { video_gen_id: videoGenId, msg, data: JSON.stringify(data).slice(0, 300) });
+          return { error: String(msg) };
+        }
+        // succeeded / completed / done ? ??? URL
         const videoUrl =
           data.video_url || data.url || data.output_url ||
           data.data?.video_url || data.data?.url ||
@@ -916,41 +1074,53 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
           (Array.isArray(data.videos) && data.videos[0]?.url) ||
           (Array.isArray(data.generations) && data.generations[0]?.url);
         if (videoUrl) {
-          log.info('[Sora poll] 视频完成', { video_gen_id: videoGenId, video_url: videoUrl });
+          log.info('[Sora poll] ????', { video_gen_id: videoGenId, video_url: videoUrl });
           return { video_url: videoUrl };
         }
         if (status === 'succeeded' || status === 'completed' || status === 'done') {
-          log.warn('[Sora poll] 状态为完成但未找到 video_url', { video_gen_id: videoGenId, data: JSON.stringify(data).slice(0, 500) });
-          return { error: 'Sora 视频生成完成但未返回视频地址，响应: ' + JSON.stringify(data).slice(0, 300) };
+          log.warn('[Sora poll] ????????? video_url', { video_gen_id: videoGenId, data: JSON.stringify(data).slice(0, 500) });
+          return { error: 'Sora ?????????????????: ' + JSON.stringify(data).slice(0, 300) };
         }
-        // queued / processing / running → 继续等待
+        // queued / processing / running ? ????
         continue;
       }
 
       if (isVidu) {
-        const state = data?.state || data?.status;
-        if (state === 'failed') {
-          const msg = data?.err_code || data?.message || 'Vidu 视频任务失败';
-          log.warn('Vidu video task failed', { video_gen_id: videoGenId, task_id: taskId, state, msg });
+        const state = (data?.state || data?.status || data?.data?.status || '').toLowerCase();
+        log.info('[Vidu poll] ????', { video_gen_id: videoGenId, attempt, state, id: taskId });
+        if (state === 'failed' || state === 'error') {
+          const msg = data?.err_code || data?.message || data?.error?.message || data?.error || 'Vidu ??????';
+          log.warn('[Vidu poll] ????', { video_gen_id: videoGenId, msg });
           return { error: String(msg) };
         }
-        if (state === 'success') {
-          const videoUrl = data?.creations?.[0]?.url;
-          if (videoUrl) return { video_url: videoUrl };
-          return { error: 'Vidu 视频生成完成但未返回视频地址' };
+        // ?? ent/v2 ???????? success???? creations[0].url
+        // ??????????????? succeeded/completed/done???? video_url/url ?
+        const videoUrl =
+          data?.creations?.[0]?.url ||
+          data?.video_url || data?.url ||
+          data?.data?.video_url || data?.data?.url ||
+          data?.result?.url ||
+          (Array.isArray(data?.works) && data.works[0]?.resource?.resource) ||
+          (Array.isArray(data?.videos) && data.videos[0]?.url);
+        if (videoUrl) {
+          log.info('[Vidu poll] ????', { video_gen_id: videoGenId, video_url: videoUrl });
+          return { video_url: videoUrl };
         }
-        // state: created / queueing / processing → 继续等待
+        if (state === 'success' || state === 'succeeded' || state === 'completed' || state === 'done') {
+          log.warn('[Vidu poll] ???????? video_url', { data: JSON.stringify(data).slice(0, 500) });
+          return { error: 'Vidu ??????????' };
+        }
         continue;
       }
 
       if (isGemini) {
         if (data.error) {
-          return { error: data.error.message || 'Gemini 视频任务失败' };
+          return { error: data.error.message || 'Gemini ??????' };
         }
         if (data.done === true) {
           const videoUri = data.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
           if (videoUri) return { video_url: videoUri };
-          return { error: 'Gemini 视频生成完成但未返回视频地址' };
+          return { error: 'Gemini ??????????????' };
         }
         continue;
       }
@@ -961,19 +1131,19 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         if (videoUrl) return { video_url: videoUrl };
         if (taskStatus === 'FAILED' || taskStatus === 'CANCELED') {
           const msg = data?.message || data?.output?.message || taskStatus;
-          log.warn('DashScope 视频任务失败（若为 download image failed，多为图片 URL 非外网可访问，如 localhost）', {
+          log.warn('DashScope ????????? download image failed????? URL ???????? localhost?', {
             video_gen_id: videoGenId,
             task_id: taskId,
             task_status: taskStatus,
             message: msg,
             output: data?.output,
           });
-          return { error: msg || '通义万相任务失败' };
+          return { error: msg || '????????' };
         }
         continue;
       }
       const status = data.status || (data.data && data.data.status);
-      // 兼容多种字段名：标准 video_url / Sora url / generations[].url / data.data.*
+      // ?????????? video_url / Sora url / generations[].url / data.data.*
       const videoUrl =
         data.video_url || data.url ||
         (data.data && (data.data.video_url || data.data.url)) ||
@@ -982,12 +1152,12 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         (Array.isArray(data.data) && data.data[0]?.url);
       const errMsg = data.error && (typeof data.error === 'string' ? data.error : data.error.message);
       if (videoUrl) return { video_url: videoUrl };
-      if (status === 'failed' || status === 'error' || status === 'cancelled' || errMsg) return { error: errMsg || status || '任务失败' };
+      if (status === 'failed' || status === 'error' || status === 'cancelled' || errMsg) return { error: errMsg || status || '????' };
     } catch (e) {
       log.warn('Video poll request failed', { attempt, error: e.message });
     }
   }
-  return { error: '视频生成超时' };
+  return { error: '??????' };
 }
 
 module.exports = {

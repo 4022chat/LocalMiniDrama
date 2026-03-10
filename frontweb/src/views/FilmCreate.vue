@@ -748,8 +748,10 @@
                       :src="assetImageUrl(getSbImage(sb.id))"
                       class="sb-generated-img"
                       alt=""
+                      :title="getSbImage(sb.id).prompt || ''"
                       @click="openImagePreview(assetImageUrl(getSbImage(sb.id)))"
                     />
+                    <div v-if="getSbImage(sb.id).prompt" class="sb-main-img-prompt">{{ getSbImage(sb.id).prompt }}</div>
                   </template>
                   <template v-else-if="sb.composed_image || sb.image_url">
                     <img
@@ -783,7 +785,7 @@
                     v-for="item in getStripItems(sb.id)"
                     :key="item.key"
                     class="sb-img-thumb"
-                    :title="item.label || '点击设为主图'"
+                    :title="[item.label, item.prompt].filter(Boolean).join('\n\n') || '点击设为主图'"
                     @click="onSelectStripItem(sb, item)"
                   >
                     <img :src="item.src" alt="" />
@@ -1824,6 +1826,7 @@ function getStripItems(storyboardId) {
       type: 'img',
       img,
       label: quadPanelLabel(img.frame_type),
+      prompt: img.prompt || '',
     }))
 }
 
@@ -5261,6 +5264,23 @@ html.light .storyboard-row:hover {
   align-items: center;
   justify-content: center;
   min-height: 80px;
+}
+/* 主图下方提示词预览 */
+.sb-main-img-prompt {
+  width: 100%;
+  font-size: 10px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-lighter);
+  border-top: 1px solid var(--el-border-color-lighter);
+  padding: 4px 6px;
+  line-height: 1.4;
+  max-height: 48px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-all;
+  cursor: default;
 }
 /* 四宫格整图作为上方预览时稍微缩小 */
 .sb-quad-preview { max-height: 160px; }

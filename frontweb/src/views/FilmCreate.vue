@@ -532,15 +532,20 @@
           </label>
         </div>
         <div class="asset-actions sb-batch-actions">
-          <el-button
-            type="primary"
-            size="large"
-            :loading="storyboardGenerating"
-            :disabled="!currentEpisodeId || storyboardGenerating"
-            @click="onGenerateStoryboard"
-          >
-            {{ storyboards.length > 0 ? '重新生成分镜' : 'AI 生成分镜' }}
-          </el-button>
+          <div class="flex">
+            <el-button
+              type="primary"
+              size="large"
+              :loading="storyboardGenerating"
+              :disabled="!currentEpisodeId || storyboardGenerating"
+              @click="onGenerateStoryboard"
+            >
+              {{ storyboards.length > 0 ? '重新生成分镜' : 'AI 生成分镜' }}
+            </el-button>
+            <ElButton type="info" plain size="large" @click="onAddSingleStoryboard">
+            单独生成分镜
+            </ElButton>
+          </div>
           <template v-if="storyboards.length > 0">
             <div class="sb-batch-right">
               <el-button
@@ -597,7 +602,10 @@
         </div>
         <template v-if="storyboards.length > 0">
           <div v-for="(sb, i) in storyboards" :key="sb.id" :id="'sb-' + sb.id" class="storyboard-row">
-            <div class="sb-num-badge">{{ i + 1 }}</div>
+            <div class="sb-num-badge">
+              <span>{{ i + 1 }}</span>
+              <ElButton  type="danger" size="small" @click="onDeleteSingleStoryboard(sb.id)">删除</ElButton>
+            </div>
             <!-- 左：分镜脚本 -->
             <div class="sb-panel sb-script">
               <div class="sb-panel-title">
@@ -3381,6 +3389,46 @@ async function onGenerateStoryboard() {
   }
 }
 
+async function onAddSingleStoryboard(){
+  if (!currentEpisodeId.value) {
+    ElMessage.warning('请先选择集')
+    return
+  }
+  try {
+    // 获取当前最大序号（仅计算当前集的分镜）
+    const maxNum = (store.storyboards || [])
+      .filter(sb => sb.episode_id === currentEpisodeId.value)
+      .reduce((max, sb) => Math.max(max, sb.storyboard_number || 0), 0)
+    await storyboardsAPI.create({
+      episode_id: currentEpisodeId.value,
+      storyboard_number: maxNum + 1,
+      title: `镜头 ${maxNum + 1}`,
+      description: '',
+    })
+    ElMessage.success('添加成功')
+    await loadDrama() // 刷新列表
+  } catch (e) {
+    ElMessage.error(e.message || '添加失败')
+  }
+}
+
+async function onDeleteSingleStoryboard(id){
+  try {
+    await ElMessageBox.confirm('确定要删除这个分镜吗？', '提示', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await storyboardsAPI.delete(id)
+    ElMessage.success('删除成功')
+    await loadDrama() // 刷新列表
+  } catch (e) {
+    if (e !== 'cancel') {
+      ElMessage.error(e.message || '删除失败')
+    }
+  }
+}
+
 async function startBatchImageGeneration() {
   if (!currentEpisodeId.value || batchImageRunning.value || pipelineRunning.value) return
   batchImageErrors.value = []
@@ -5057,17 +5105,22 @@ html.light .storyboard-row:hover {
   position: absolute;
   left: 12px;
   top: 12px;
-  width: 24px;
   height: 24px;
-  border-radius: 6px;
-  background: var(--el-color-primary);
-  color: #fff;
   font-size: 12px;
   font-weight: 600;
   display: flex;
+  gap: 20px;
+  z-index: 1;
+}
+.sb-num-badge span{
+  background: var(--el-color-primary);
+  width: 24px;
+  height:100%;
+  color: #fff;
+  border-radius: 6px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1;
 }
 .sb-panel {
   flex: 1;

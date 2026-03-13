@@ -979,7 +979,12 @@
             </div>
           </div>
         </template>
-        <div v-else class="empty-tip">请先生成分镜</div>
+        <!-- 分镜生成中提示条 -->
+        <div v-if="storyboardGenerating" class="sb-generating-tip">
+          <span class="sb-gen-dot" /><span class="sb-gen-dot" /><span class="sb-gen-dot" />
+          <span class="sb-gen-text">分镜持续生成中，客官稍等片刻…</span>
+        </div>
+        <div v-else-if="storyboards.length === 0" class="empty-tip">请先生成分镜</div>
       </section>
 
       <!-- 7. 视频配置 + AI 模型配置 -->
@@ -3559,9 +3564,24 @@ async function onGenerateSbVideo(sb) {
   }
 }
 
+/** 生成期间轻量刷新分镜列表（只更新 currentEpisode.storyboards，不重载整个 drama） */
+async function refreshStoryboardsOnly() {
+  if (!currentEpisodeId.value) return
+  try {
+    const res = await dramaAPI.getStoryboards(currentEpisodeId.value)
+    // API 返回 { storyboards: [...], total: N }，需要取 .storyboards
+    const list = Array.isArray(res) ? res : (res?.storyboards ?? null)
+    if (store.currentEpisode && Array.isArray(list)) {
+      store.currentEpisode.storyboards = list
+    }
+  } catch (_) { /* 静默忽略，不影响主流程 */ }
+}
+
 async function onGenerateStoryboard() {
   if (!currentEpisodeId.value) return
   storyboardGenerating.value = true
+  // 生成期间每 2 秒刷新分镜列表，让已解析的分镜逐步出现
+  const refreshTimer = setInterval(refreshStoryboardsOnly, 2000)
   try {
     const res = await dramaAPI.generateStoryboard(currentEpisodeId.value, {
       model: undefined,
@@ -3586,6 +3606,7 @@ async function onGenerateStoryboard() {
     // HTTP 错误由 request 拦截器统一展示，此处仅处理拦截器未覆盖的异常
     if (!e.response) ElMessage.error(e.message || '生成失败')
   } finally {
+    clearInterval(refreshTimer)
     storyboardGenerating.value = false
   }
 }
@@ -5524,6 +5545,10 @@ html.light .empty-tip {
 }
 
 /* 分镜：每行一个，三列布局 */
+@keyframes sb-fade-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 .storyboard-row {
   display: flex;
   align-items: stretch;
@@ -5537,6 +5562,7 @@ html.light .empty-tip {
   overflow: hidden;
   position: relative;
   transition: border-color 0.25s, box-shadow 0.25s;
+  animation: sb-fade-in 0.35s ease both;
 }
 .storyboard-row:hover {
   border-color: rgba(139, 92, 246, 0.3);
@@ -5968,6 +5994,38 @@ html.light .storyboard-row:hover {
 }
 .sb-truncated-warning span {
   flex: 1;
+}
+/* 分镜生成中提示条 */
+.sb-generating-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 18px;
+  margin-top: 10px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px dashed rgba(139, 92, 246, 0.35);
+  border-radius: 10px;
+  color: #a78bfa;
+  font-size: 0.9rem;
+}
+.sb-gen-text {
+  flex: 1;
+  letter-spacing: 0.03em;
+}
+.sb-gen-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #a78bfa;
+  animation: sb-dot-bounce 1.2s infinite ease-in-out both;
+}
+.sb-gen-dot:nth-child(1) { animation-delay: 0s; }
+.sb-gen-dot:nth-child(2) { animation-delay: 0.2s; }
+.sb-gen-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes sb-dot-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+  40%            { transform: scale(1);   opacity: 1;   }
 }
 .sb-config-row {
   display: flex;

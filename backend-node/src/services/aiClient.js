@@ -73,10 +73,10 @@ function postJSONStream(url, headers, body, silenceTimeoutMs = 60000, onProgress
             if (delta) {
               if (firstToken) {
                 firstToken = false;
-                if (onProgress) onProgress(0, 'first_token');
+                if (onProgress) onProgress(0, 'first_token', '');
               }
               accumulated += delta;
-              if (onProgress) onProgress(accumulated.length);
+              if (onProgress) onProgress(accumulated.length, null, accumulated);
             }
           } catch (_) { /* 忽略无法解析的行 */ }
         }
@@ -130,7 +130,7 @@ function getModelFromConfig(config, preferredModel) {
 }
 
 async function generateText(db, log, serviceType, userPrompt, systemPrompt, options = {}) {
-  const { model: preferredModel, temperature = 0.7, json_mode = false, min_max_tokens = null } = options;
+  const { model: preferredModel, temperature = 0.7, json_mode = false, min_max_tokens = null, streamCallback = null } = options;
   let config = preferredModel
     ? getConfigForModel(db, serviceType, preferredModel)
     : getDefaultConfig(db, serviceType);
@@ -194,13 +194,15 @@ async function generateText(db, log, serviceType, userPrompt, systemPrompt, opti
   };
   const startMs = Date.now();
   log.info('AI generateText request', { url: url.slice(0, 60), model, max_tokens: finalMaxTokens ?? '(model default)', json_mode, stream: true });
-  const res = await postJSONStream(url, { Authorization: 'Bearer ' + (config.api_key || '') }, body, 60000, (receivedLen, event) => {
+  const res = await postJSONStream(url, { Authorization: 'Bearer ' + (config.api_key || '') }, body, 60000, (receivedLen, event, accumulated) => {
     if (event === 'first_token') {
       log.info('AI stream first token', { model, ttft_ms: Date.now() - startMs });
     } else if (receivedLen > 0 && receivedLen % 500 < 20) {
       // 每积累约 500 字符记录一次进度
       log.info('AI stream progress', { model, received_chars: receivedLen, elapsed_ms: Date.now() - startMs });
     }
+    // 调用者提供的流式回调（如分镜增量解析），传入当前已积累的完整文本
+    if (streamCallback && accumulated) streamCallback(accumulated);
   });
   // 流式模式下 res.body 已是拼接好的完整文本内容（非 JSON）
   const content = res.body;

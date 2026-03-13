@@ -79,6 +79,30 @@ function repairTruncatedJsonArray(str) {
 }
 
 /**
+ * 清除 JSON 字符串中非法的原始控制字符（0x00–0x08, 0x0B, 0x0C, 0x0E–0x1F）。
+ * JSON 规范要求控制字符必须用 \uXXXX 转义，AI 有时会直接输出原始字节（如退格符 \b / 0x08）。
+ * 保留 0x09(\t)、0x0A(\n)、0x0D(\r)，它们在 JSON 中常见且合法。
+ */
+function sanitizeControlChars(str) {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+}
+
+/**
+ * 修复 AI 常见 JSON 缺陷：字符串值缺少开始引号（有结尾引号但无开始引号）。
+ * 场景：AI 输出 "key": 中文文字"  →  应为 "key": "中文文字"
+ * 仅处理值的第一个字符不是合法 JSON 值起始字符（" { [ 数字 - t f n）的情况。
+ */
+function fixUnquotedStringValues(str) {
+  // 匹配模式：冒号-空格 + 非JSON合法值起始字符 + 任意内容(不含引号/换行/括号) + 结尾引号
+  // 结尾引号后必须紧跟 , } ] 或换行，确保这确实是个值边界
+  return str.replace(
+    /(:\s*)([^"\s{[\-\d+tfn\r\n][^",\r\n[\]{}]*?)("(?=\s*[,}\]\r\n]))/g,
+    '$1"$2$3'
+  );
+}
+
+/**
  * @param {string} aiResponse
  * @param {object|Array} v - 默认值类型（用于判断期望返回类型）
  * @param {object} [log] - 可选 logger，有 warn/info 方法；不传则用 console.warn
@@ -96,7 +120,7 @@ function safeParseAIJSON(aiResponse, v, log, outMeta) {
   if (!aiResponse || typeof aiResponse !== 'string') {
     throw new Error('AI返回内容为空');
   }
-  let cleaned = aiResponse.trim()
+  let cleaned = sanitizeControlChars(aiResponse).trim()
     .replace(/^```json\s*/gm, '')
     .replace(/^```\s*/gm, '')
     .replace(/```\s*$/gm, '')
@@ -117,7 +141,7 @@ function safeParseAIJSON(aiResponse, v, log, outMeta) {
     }
     return parsed;
   } catch (err) {
-    _warn('AI JSON 破损，尝试修复', { original_error: err.message, text_length: jsonStr.length, text_head: jsonStr.slice(0, 120) });
+    _warn('AI JSON 破损，尝试修复', { original_error: err.message, text_length: jsonStr.length, text_head: jsonStr.slice(0, 120000) });
 
     // 修复策略 1：截断数组修复（应对 max_tokens 截断场景）
     const repaired = repairTruncatedJsonArray(jsonStr);
@@ -141,9 +165,8 @@ function safeParseAIJSON(aiResponse, v, log, outMeta) {
     }
 
     // 修复策略 2：jsonrepair 深度修复
-    // 经验证，jsonrepair 原生支持：未加引号的字符串值（含中文/全角括号）、
-    // 截断数组、尾逗号、单引号、Python 布尔值等几乎所有 LLM 常见输出缺陷。
     if (_jsonrepair) {
+      // 策略 2a：直接 jsonrepair
       try {
         const fixed = _jsonrepair(jsonStr);
         const parsed = JSON.parse(fixed);
@@ -159,6 +182,28 @@ function safeParseAIJSON(aiResponse, v, log, outMeta) {
           Object.assign(v, parsed);
         }
         return parsed;
+      } catch (_) {}
+
+      // 策略 2b：预处理"有结尾引号但缺开始引号"的裸值，再交给 jsonrepair
+      // 场景：AI 生成 "key": 中文值"  而非  "key": "中文值"
+      try {
+        const preFixed = fixUnquotedStringValues(jsonStr);
+        if (preFixed !== jsonStr) {
+          const fixed2 = _jsonrepair(preFixed);
+          const parsed = JSON.parse(fixed2);
+          _warn('AI JSON 修复成功（预处理裸值 + jsonrepair）', {
+            rescued_items: Array.isArray(parsed) ? parsed.length : 1,
+            original_len: jsonStr.length,
+            fixed_len: fixed2.length,
+          });
+          if (Array.isArray(v)) {
+            v.length = 0;
+            v.push(...(Array.isArray(parsed) ? parsed : []));
+          } else if (v && typeof v === 'object') {
+            Object.assign(v, parsed);
+          }
+          return parsed;
+        }
       } catch (_) {}
     }
 
@@ -183,4 +228,4 @@ function extractFirstArray(parsed) {
   return null;
 }
 
-module.exports = { safeParseAIJSON, extractJsonCandidate, extractFirstArray };
+module.exports = { safeParseAIJSON, extractJsonCandidate, repairTruncatedJsonArray, extractFirstArray };

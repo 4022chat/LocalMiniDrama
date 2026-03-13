@@ -21,35 +21,64 @@ async function generateStory(db, log, body) {
   // 不使用 max_tokens 硬上限，而是用 min_max_tokens 确保即使用户 AI 配置了小上限也能保证基本输出量。
   const minTokensNeeded = Math.max(2000, episodeCount * 2200);
 
+  // 注意：不使用 json_mode=true，因为 response_format:json_object 要求返回 JSON 对象而非数组，
+  // 会导致模型将数组包成 {"episodes":[...]} 对象，破坏解析逻辑。依靠 prompt 本身约束格式即可。
   const rawText = await aiClient.generateText(db, log, 'text', userPrompt, systemPrompt, {
     model: body.model || undefined,
     temperature: 0.8,
     min_max_tokens: minTokensNeeded,
-    json_mode: true,
   });
 
-  // 解析 JSON 数组
-  let episodes = null;
+  log && log.info && log.info('Story raw response', {
+    text_length: (rawText || '').length,
+    episode_count: episodeCount,
+    text_preview: (rawText || '').slice(0, 200),
+  });
+
+  // 解析 JSON，支持多种 AI 返回格式
+  let parsed = null;
   try {
-    episodes = safeParseAIJSON(rawText, log);
+    parsed = safeParseAIJSON(rawText, log);
   } catch (e) {
-    log && log.warn && log.warn('Story JSON parse failed, falling back to plain text', { error: e.message });
+    log && log.warn && log.warn('Story JSON parse failed', { error: e.message });
   }
 
-  if (Array.isArray(episodes) && episodes.length > 0) {
-    // 确保每集都有 episode 序号和 content
-    const result = episodes.map((ep, i) => ({
-      episode: ep.episode ?? i + 1,
-      title: (ep.title || `第${(ep.episode ?? i + 1)}集`).trim(),
-      content: (ep.content || ep.script || ep.text || '').trim(),
+  // 规范化为集数数组，兼容以下常见 AI 输出格式：
+  // 1. 直接数组 [{episode,title,content}, ...]
+  // 2. 包装对象 { episodes: [...] } 或 { data: [...] }
+  // 3. 单个对象 {episode:1, title, content}（只生成1集时）
+  let episodeList = null;
+  if (Array.isArray(parsed)) {
+    episodeList = parsed;
+  } else if (parsed && typeof parsed === 'object') {
+    const keys = Object.keys(parsed);
+    // 找第一个 value 是数组的字段（如 episodes / data / items）
+    const arrKey = keys.find(k => Array.isArray(parsed[k]));
+    if (arrKey) {
+      episodeList = parsed[arrKey];
+    } else if (parsed.content || parsed.episode) {
+      // 单集对象
+      episodeList = [parsed];
+    }
+  }
+
+  if (episodeList && episodeList.length > 0) {
+    const result = episodeList.map((ep, i) => ({
+      episode: Number(ep.episode ?? i + 1),
+      title: (ep.title || `第${Number(ep.episode ?? i + 1)}集`).trim(),
+      content: (ep.content || ep.script || ep.text || ep.body || '').trim(),
     })).filter(ep => ep.content.length > 0);
 
     if (result.length > 0) {
+      log && log.info && log.info('Story episodes parsed', { count: result.length });
       return { episodes: result };
     }
   }
 
-  // 兜底：如果 JSON 解析失败，把整个文本当作第 1 集返回
+  // 兜底：JSON 解析失败或返回纯文本，把整段文本当作第 1 集正文
+  log && log.warn && log.warn('Story JSON parse gave no valid episodes, treating as plain text', {
+    text_length: (rawText || '').length,
+  });
   const fallbackContent = (rawText || '').trim();
   return {
     episodes: [{

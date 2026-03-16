@@ -79,6 +79,23 @@ function repairTruncatedJsonArray(str) {
 }
 
 /**
+ * 激进截断修复：当 repairTruncatedJsonArray 找不到任何完整顶层元素时使用。
+ * 场景：截断恰好发生在第一个（或唯一一个）对象内部，深度追踪器无法记录到任何完整边界。
+ * 策略：找到字符串里最后一个 } 的位置，强制截断并补上 ]，
+ *       让后续 JSON.parse / jsonrepair 在更干净的输入上再做一次尝试。
+ * 返回 null 表示无法构造候选串。
+ */
+function repairByLastBrace(str) {
+  const trimmed = str.trimStart();
+  if (!trimmed.startsWith('[')) return null;
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (lastBrace === -1) return null;
+  // 截断到最后一个 }，去掉紧随其后可能存在的尾随逗号，再补上 ]
+  const cut = trimmed.slice(0, lastBrace + 1).trimEnd().replace(/,\s*$/, '');
+  return cut + ']';
+}
+
+/**
  * 清除 JSON 字符串中非法的原始控制字符（0x00–0x08, 0x0B, 0x0C, 0x0E–0x1F）。
  * JSON 规范要求控制字符必须用 \uXXXX 转义，AI 有时会直接输出原始字节（如退格符 \b / 0x08）。
  * 保留 0x09(\t)、0x0A(\n)、0x0D(\r)，它们在 JSON 中常见且合法。
@@ -144,11 +161,13 @@ function safeParseAIJSON(aiResponse, v, log, outMeta) {
     _warn('AI JSON 破损，尝试修复', { original_error: err.message, text_length: jsonStr.length, text_head: jsonStr.slice(0, 120000) });
 
     // 修复策略 1：截断数组修复（应对 max_tokens 截断场景）
+    // 通过深度追踪找到已完整闭合的顶层元素，截断后补 ]
     const repaired = repairTruncatedJsonArray(jsonStr);
     if (repaired && repaired !== jsonStr) {
+      // 策略 1a：直接解析截断修复结果
       try {
         const parsed = JSON.parse(repaired);
-        _warn('AI JSON 修复成功（策略1：截断修复）', {
+        _warn('AI JSON 修复成功（策略1a：截断修复）', {
           rescued_items: Array.isArray(parsed) ? parsed.length : 1,
           original_len: jsonStr.length,
           repaired_len: repaired.length,
@@ -162,9 +181,80 @@ function safeParseAIJSON(aiResponse, v, log, outMeta) {
         }
         return parsed;
       } catch (_) {}
+
+      // 策略 1b：截断结果本身有小问题（如末尾字段含非法字符），再用 jsonrepair 做最终修复
+      if (_jsonrepair) {
+        try {
+          const fixed = _jsonrepair(repaired);
+          const parsed = JSON.parse(fixed);
+          _warn('AI JSON 修复成功（策略1b：截断修复 + jsonrepair）', {
+            rescued_items: Array.isArray(parsed) ? parsed.length : 1,
+            original_len: jsonStr.length,
+            repaired_len: repaired.length,
+            fixed_len: fixed.length,
+          });
+          if (outMeta) outMeta.truncated = true;
+          if (Array.isArray(v)) {
+            v.length = 0;
+            v.push(...(Array.isArray(parsed) ? parsed : []));
+          } else if (v && typeof v === 'object') {
+            Object.assign(v, parsed);
+          }
+          return parsed;
+        } catch (_) {}
+      }
     }
 
-    // 修复策略 2：jsonrepair 深度修复
+    // 策略 1c/1d：激进截断——repairTruncatedJsonArray 找不到完整顶层元素时
+    // （截断恰好发生在第一个对象内部），强制切到最后一个 } 处后补 ]
+    const roughCut = repairByLastBrace(jsonStr);
+    if (roughCut && roughCut !== jsonStr) {
+      // 策略 1c：直接解析粗截断结果
+      try {
+        const parsed = JSON.parse(roughCut);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          _warn('AI JSON 修复成功（策略1c：激进截断修复）', {
+            rescued_items: parsed.length,
+            original_len: jsonStr.length,
+            roughcut_len: roughCut.length,
+          });
+          if (outMeta) outMeta.truncated = true;
+          if (Array.isArray(v)) {
+            v.length = 0;
+            v.push(...parsed);
+          } else if (v && typeof v === 'object') {
+            Object.assign(v, parsed);
+          }
+          return parsed;
+        }
+      } catch (_) {}
+
+      // 策略 1d：粗截断结果仍有小问题，交给 jsonrepair 做最终修复
+      if (_jsonrepair) {
+        try {
+          const fixed = _jsonrepair(roughCut);
+          const parsed = JSON.parse(fixed);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            _warn('AI JSON 修复成功（策略1d：激进截断修复 + jsonrepair）', {
+              rescued_items: parsed.length,
+              original_len: jsonStr.length,
+              roughcut_len: roughCut.length,
+              fixed_len: fixed.length,
+            });
+            if (outMeta) outMeta.truncated = true;
+            if (Array.isArray(v)) {
+              v.length = 0;
+              v.push(...parsed);
+            } else if (v && typeof v === 'object') {
+              Object.assign(v, parsed);
+            }
+            return parsed;
+          }
+        } catch (_) {}
+      }
+    }
+
+    // 修复策略 2：jsonrepair 深度修复（对完整破损字符串全量修复）
     if (_jsonrepair) {
       // 策略 2a：直接 jsonrepair
       try {

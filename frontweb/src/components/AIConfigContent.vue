@@ -58,7 +58,7 @@
               一键换Key
             </el-button>
           </div>
-          <p class="default-tip">每种服务类型仅有一个默认配置：文本用于生成故事；文本生成图片用于角色/场景/道具图；分镜图片生成用于分镜图（支持参考图）；视频用于生成视频。</p>
+          <p class="default-tip">每种服务类型仅有一个默认配置：文本用于生成故事；文本生成图片用于角色/场景/道具图；分镜图片生成用于分镜图（支持参考图）；视频用于生成视频；语音合成 TTS 用于分镜配音。</p>
           <el-table
             v-loading="loading"
             :data="list"
@@ -83,6 +83,7 @@
                     <Picture v-else-if="row.service_type === 'image'" />
                     <Film v-else-if="row.service_type === 'storyboard_image'" />
                     <VideoCamera v-else-if="row.service_type === 'video'" />
+                    <Microphone v-else-if="row.service_type === 'tts'" />
                   </el-icon>
                   {{ serviceTypeLabel(row.service_type) }}
                 </span>
@@ -240,7 +241,8 @@
                     <b>文本/对话</b>：用于 AI 生成故事剧本<br>
                     <b>文本生成图片</b>：角色、场景、道具的图片生成（不支持参考图）<br>
                     <b>分镜图片生成</b>：生成分镜图片，支持传入角色参考图<br>
-                    <b>视频生成</b>：根据分镜图生成视频片段
+                    <b>视频生成</b>：根据分镜图生成视频片段<br>
+                    <b>语音合成 TTS</b>：为分镜对白自动合成语音（点分镜配音按钮时使用）
                   </div>
                 </template>
                 <el-icon class="tip-icon"><QuestionFilled /></el-icon>
@@ -252,6 +254,7 @@
             <el-option label="文本生成图片" value="image" />
             <el-option label="分镜图片生成" value="storyboard_image" />
             <el-option label="视频生成" value="video" />
+            <el-option label="语音合成 TTS" value="tts" />
           </el-select>
         </el-form-item>
         <el-form-item prop="provider">
@@ -289,7 +292,7 @@
           </el-select>
         </el-form-item>
         <!-- 接口规范：仅图片/分镜/视频类型显示，预设厂商自动填充；自定义厂商必选 -->
-        <el-form-item v-if="form.service_type !== 'text'">
+        <el-form-item v-if="form.service_type !== 'text' && form.service_type !== 'tts'">
           <template #label>
             <span class="form-label-tip">接口规范
               <el-icon class="tip-icon" style="cursor:pointer;color:#409eff" @click="showProtocolHelp = true"><QuestionFilled /></el-icon>
@@ -483,8 +486,68 @@ input_reference = (图片文件，可选)</pre>
           </template>
           <el-input v-model="form.api_key" type="password" placeholder="API 密钥" show-password />
         </el-form-item>
+        <!-- TTS 专属字段：声音 ID 和 MiniMax Group ID -->
+        <template v-if="form.service_type === 'tts'">
+          <el-form-item>
+            <template #label>
+              <span class="form-label-tip">声音 ID
+                <el-tooltip placement="top" popper-class="cfg-tip-popper">
+                  <template #content>
+                    <div class="cfg-tip-content">
+                      TTS 合成使用的音色 ID。<br>
+                      <b>MiniMax 常用音色：</b><br>
+                      female-shaonv（少女）、female-chengshu（成熟）<br>
+                      male-qingxin（清新男）、male-zhicheng（知城男）<br>
+                      audiobook_female_2（有声书女）、audiobook_male_1（有声书男）
+                    </div>
+                  </template>
+                  <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
+            </template>
+            <el-select
+              v-model="form.voice_id"
+              filterable
+              allow-create
+              default-first-option
+              placeholder="选择或输入声音 ID"
+              style="width: 100%"
+            >
+              <el-option-group label="MiniMax 女声">
+                <el-option label="female-shaonv（少女）" value="female-shaonv" />
+                <el-option label="female-chengshu（成熟）" value="female-chengshu" />
+                <el-option label="female-tianmei（甜美）" value="female-tianmei" />
+                <el-option label="audiobook_female_2（有声书）" value="audiobook_female_2" />
+              </el-option-group>
+              <el-option-group label="MiniMax 男声">
+                <el-option label="male-qingxin（清新）" value="male-qingxin" />
+                <el-option label="male-zhicheng（知城）" value="male-zhicheng" />
+                <el-option label="audiobook_male_1（有声书）" value="audiobook_male_1" />
+              </el-option-group>
+            </el-select>
+            <p class="field-tip">MiniMax 必填；不填默认 female-shaonv。</p>
+          </el-form-item>
+          <el-form-item>
+            <template #label>
+              <span class="form-label-tip">Group ID
+                <el-tooltip placement="top" popper-class="cfg-tip-popper">
+                  <template #content>
+                    <div class="cfg-tip-content">
+                      MiniMax 账号的 GroupId，调用 T2A v2 接口时附在 URL 参数里。<br>
+                      登录 <b>platform.minimaxi.com</b> → 账户设置 → 即可查看 GroupId。
+                    </div>
+                  </template>
+                  <el-icon class="tip-icon"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
+            </template>
+            <el-input v-model="form.group_id" placeholder="MiniMax GroupId，如 1234567890" />
+            <p class="field-tip">仅 MiniMax T2A 需要此字段。</p>
+          </el-form-item>
+        </template>
+
         <!-- 端点配置：视频必填（自定义厂商）；图片/分镜在使用代理或特殊厂商时填写 -->
-        <template v-if="form.service_type !== 'text'">
+        <template v-if="form.service_type !== 'text' && form.service_type !== 'tts'">
           <el-form-item>
             <template #label>
               <span class="form-label-tip">提交端点
@@ -779,7 +842,7 @@ input_reference = (图片文件，可选)</pre>
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, MagicStick, QuestionFilled, Download, Upload, Delete, ChatDotRound, Picture, Film, VideoCamera, Key } from '@element-plus/icons-vue'
+import { Plus, MagicStick, QuestionFilled, Download, Upload, Delete, ChatDotRound, Picture, Film, VideoCamera, Key, Microphone } from '@element-plus/icons-vue'
 import { aiAPI } from '@/api/ai'
 import { generationSettingsAPI } from '@/api/prompts'
 import PromptEditor from '@/components/PromptEditor.vue'
@@ -859,7 +922,10 @@ const form = ref({
   modelText: '',
   default_model: '',
   priority: 0,
-  is_default: false
+  is_default: false,
+  // TTS 专属字段
+  voice_id: '',
+  group_id: '',
 })
 const presetModelPick = ref('')
 
@@ -958,6 +1024,9 @@ const providerConfigs = {
     { id: 'gemini', name: 'Google Gemini (Veo)', models: ['veo-3.1-generate-preview', 'veo-3.0-generate-preview', 'veo-3.0-fast-generate-preview'] },
     { id: 'dashscope', name: '通义万相', models: ['wan2.6-r2v-flash', 'wan2.6-t2v', 'wan2.2-kf2v-flash', 'wan2.6-i2v-flash', 'wanx2.1-vace-plus'] },
     { id: 'openai', name: 'OpenAI', models: ['sora-2', 'sora-2-pro'] }
+  ],
+  tts: [
+    { id: 'minimax', name: 'MiniMax T2A', models: ['speech-02-hd', 'speech-02-turbo'] },
   ]
 }
 
@@ -1037,6 +1106,12 @@ const endpointPreviewInfo = computed(() => {
 
   if (service_type === 'text') {
     submitPath = '/chat/completions'
+  } else if (service_type === 'tts') {
+    if (p === 'minimax') {
+      submitPath = '/t2a_v2?GroupId={group_id}'
+    } else {
+      submitPath = endpoint || '/tts'
+    }
   } else if (service_type === 'image' || service_type === 'storyboard_image') {
     if (endpoint) {
       submitPath = endpoint
@@ -1161,7 +1236,7 @@ const VOLCENGINE_CONFIGS = [
 ]
 
 function serviceTypeLabel(t) {
-  const map = { text: '文本', image: '文本生成图片', storyboard_image: '分镜图片生成', video: '视频' }
+  const map = { text: '文本', image: '文本生成图片', storyboard_image: '分镜图片生成', video: '视频', tts: '语音合成 TTS' }
   return map[t] || t
 }
 
@@ -1199,7 +1274,9 @@ function resetForm() {
     modelText: '',
     default_model: '',
     priority: 0,
-    is_default: true  // 新增时默认勾选「设为默认」，便于理解当前会使用哪条配置
+    is_default: true,  // 新增时默认勾选「设为默认」，便于理解当前会使用哪条配置
+    voice_id: '',
+    group_id: '',
   }
   formRef.value?.resetFields?.()
 }
@@ -1214,6 +1291,16 @@ function openEdit(row) {
   const model = Array.isArray(row.model) ? row.model : (row.model ? [row.model] : [])
   const modelList = model.map((m) => String(m).trim()).filter(Boolean)
   const defaultInList = row.default_model && modelList.includes(row.default_model)
+  // TTS 专属字段从 settings 解析
+  let voice_id = row.voice_id || ''
+  let group_id = row.group_id || ''
+  if (row.service_type === 'tts' && row.settings) {
+    try {
+      const s = JSON.parse(row.settings)
+      voice_id = s.voice_id || voice_id
+      group_id = s.group_id || group_id
+    } catch (_) {}
+  }
   form.value = {
     service_type: row.service_type,
     name: row.name,
@@ -1226,7 +1313,9 @@ function openEdit(row) {
     modelText: modelList.join('\n'),
     default_model: defaultInList ? row.default_model : (modelList[0] || ''),
     priority: row.priority ?? 0,
-    is_default: !!row.is_default
+    is_default: !!row.is_default,
+    voice_id,
+    group_id,
   }
   dialogVisible.value = true
 }
@@ -1239,6 +1328,14 @@ async function submit() {
     const defaultModel = form.value.default_model && modelList.includes(form.value.default_model)
       ? form.value.default_model
       : modelList[0] || null
+    // TTS 专属字段打包进 settings
+    let settings = undefined
+    if (form.value.service_type === 'tts') {
+      const s = {}
+      if (form.value.voice_id) s.voice_id = form.value.voice_id
+      if (form.value.group_id) s.group_id = form.value.group_id
+      settings = Object.keys(s).length ? JSON.stringify(s) : null
+    }
     const payload = {
       service_type: form.value.service_type,
       name: form.value.name,
@@ -1246,12 +1343,13 @@ async function submit() {
       api_protocol: form.value.api_protocol || '',
       base_url: form.value.base_url,
       api_key: form.value.api_key,
-      endpoint: form.value.endpoint || null,
-      query_endpoint: form.value.query_endpoint || null,
+      endpoint: form.value.endpoint || '',
+      query_endpoint: form.value.query_endpoint || '',
       model: modelList,
       default_model: defaultModel,
       priority: form.value.priority,
-      is_default: form.value.is_default
+      is_default: form.value.is_default,
+      ...(settings !== undefined ? { settings } : {}),
     }
     if (editingId.value) {
       await aiAPI.update(editingId.value, payload)

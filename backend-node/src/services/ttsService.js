@@ -11,9 +11,9 @@ const { randomUUID } = require('crypto');
 /**
  * 使用 MiniMax T2A v2 合成语音
  */
-async function synthesizeWithMinimax(text, voiceId, apiKey, groupId) {
+async function synthesizeWithMinimax(text, voiceId, apiKey, groupId, model) {
   const body = JSON.stringify({
-    model: 'speech-02-hd',
+    model: model || 'speech-02-hd',
     text,
     stream: false,
     voice_setting: {
@@ -80,7 +80,12 @@ async function synthesize(db, log, { text, storyboard_id, config, storage_base }
   if (!ttsConfig) throw new Error('未配置 TTS 模型，请在「AI 配置」中添加 service_type=tts 的配置');
 
   const provider = (ttsConfig.provider || '').toLowerCase();
-  const voiceId = ttsConfig.voice_id || ttsConfig.model || 'female-shaonv';
+  // voice_id 优先级：rowToConfig 展开的 voice_id → settings.voice_id → 'female-shaonv'
+  let ttsSettings = {};
+  try { ttsSettings = JSON.parse(ttsConfig.settings || '{}'); } catch (_) {}
+  const voiceId = ttsConfig.voice_id || ttsSettings.voice_id || 'female-shaonv';
+  const groupId = ttsConfig.group_id || ttsSettings.group_id || '';
+  const ttsModel = ttsConfig.default_model || (Array.isArray(ttsConfig.model) ? ttsConfig.model[0] : ttsConfig.model) || 'speech-02-hd';
   let audioBuffer;
 
   if (provider === 'minimax') {
@@ -88,7 +93,8 @@ async function synthesize(db, log, { text, storyboard_id, config, storage_base }
       text,
       voiceId,
       ttsConfig.api_key,
-      ttsConfig.group_id || ttsConfig.extra?.group_id || ''
+      groupId,
+      ttsModel
     );
   } else {
     throw new Error(`不支持的 TTS provider: ${provider}，目前支持 minimax`);

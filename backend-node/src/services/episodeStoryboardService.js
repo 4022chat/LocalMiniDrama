@@ -10,12 +10,12 @@ const angleService = require('./angleService');
 
 /**
  * 分镜专用 generateText 包装：
- * 1. 默认携带 max_tokens:32768，让模型输出更长，减少截断续写次数。
+ * 1. 默认携带 max_tokens:16384，让模型输出更长，减少截断续写次数。
  * 2. 若 API 立即返回参数错误（HTTP 4xx，且错误体提到 max_tokens/length/token），
  *    自动降级为不传 max_tokens 重试一次。
  * 3. 所有尝试均记录日志。
  */
-const DEFAULT_STORYBOARD_MAX_TOKENS = 32768;
+const DEFAULT_STORYBOARD_MAX_TOKENS = 16384;
 
 function isMaxTokensParamError(errMsg) {
   const m = (errMsg || '').toLowerCase();
@@ -33,7 +33,7 @@ function isMaxTokensParamError(errMsg) {
 async function generateTextForStoryboard(db, log, userPrompt, systemPrompt, options = {}) {
   const { model, streamCallback, temperature = 0.7 } = options;
 
-  // 第一次尝试：带 max_tokens:32768
+  // 第一次尝试：带 max_tokens:16384
   log.info('Storyboard generateText attempt 1', { model: model || '(default)', max_tokens: DEFAULT_STORYBOARD_MAX_TOKENS });
   try {
     const text = await aiClient.generateText(db, log, 'text', userPrompt, systemPrompt, {

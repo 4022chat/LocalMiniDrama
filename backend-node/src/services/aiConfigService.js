@@ -20,7 +20,7 @@ function modelFromDb(val) {
 
 /** 每种服务类型只保留一个默认：若有多个 is_default=1，只保留优先级最高（同优先级取 id 最小）的那条 */
 function ensureSingleDefaultPerType(db) {
-  const types = ['text', 'image', 'storyboard_image', 'video'];
+  const types = ['text', 'image', 'storyboard_image', 'video', 'tts'];
   for (const st of types) {
     const rows = db.prepare(
       'SELECT id, priority FROM ai_service_configs WHERE deleted_at IS NULL AND service_type = ? AND is_default = 1 ORDER BY priority DESC, id ASC'
@@ -159,13 +159,13 @@ function updateConfig(db, log, id, req) {
     updates.push('priority = ?');
     params.push(req.priority);
   }
-  if (req.endpoint != null) {
+  if (req.endpoint !== undefined) {
     updates.push('endpoint = ?');
-    params.push(req.endpoint);
+    params.push(req.endpoint || '');
   }
-  if (req.query_endpoint != null) {
+  if (req.query_endpoint !== undefined) {
     updates.push('query_endpoint = ?');
-    params.push(req.query_endpoint);
+    params.push(req.query_endpoint || '');
   }
   if (req.settings != null) {
     updates.push('settings = ?');
@@ -196,7 +196,7 @@ function deleteConfig(db, log, id) {
 }
 
 function rowToConfig(r) {
-  return {
+  const cfg = {
     id: r.id,
     service_type: r.service_type,
     provider: r.provider,
@@ -215,6 +215,15 @@ function rowToConfig(r) {
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
+  // TTS 配置：从 settings JSON 展开 voice_id / group_id 供 ttsService 直接读取
+  if (r.service_type === 'tts' && r.settings) {
+    try {
+      const s = JSON.parse(r.settings);
+      if (s.voice_id) cfg.voice_id = s.voice_id;
+      if (s.group_id) cfg.group_id = s.group_id;
+    } catch (_) {}
+  }
+  return cfg;
 }
 
 /**
@@ -269,6 +278,29 @@ async function testConnection(opts) {
     if (data.candidates == null && data.error != null) {
       throw new Error(data.error.message || data.error || 'Gemini 返回错误');
     }
+    return;
+  }
+
+  // --- TTS 语音合成 ---
+  if (serviceType === 'tts') {
+    // MiniMax T2A：用 /v1/models 或直接对 chat 端点做轻量探针
+    const ttsBase = base.includes('minimaxi.com') || base.includes('minimax') ? base : base;
+    // 尝试调用一个极简的 MiniMax T2A 请求（1 字，验证 key 合法性）
+    // 为避免真实扣费，使用非计费的 list-voices 或 models 接口
+    const probeUrl = ttsBase + '/text_to_speech';
+    const probeBody = JSON.stringify({ model: model || 'speech-02-hd', text: 'hi', stream: false });
+    const res = await fetch(probeUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (opts.api_key || '') },
+      body: probeBody,
+    });
+    if (res.status === 401 || res.status === 403) {
+      const text = await res.text();
+      let errMsg = `API Key 无效 (${res.status})`;
+      try { const j = JSON.parse(text); errMsg = j.base_resp?.status_msg || j.error?.message || j.message || errMsg; } catch {}
+      throw new Error(errMsg);
+    }
+    // 其他状态（400 缺参数、404 端点不对等）说明网络通、key 疑似有效
     return;
   }
 

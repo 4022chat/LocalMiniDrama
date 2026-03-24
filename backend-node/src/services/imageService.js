@@ -693,6 +693,29 @@ async function processImageGeneration(db, log, imageGenId) {
             }
           } catch (_) {}
         }
+        // ── 分镜关联道具（storyboard_props）→ 参考图（前端「物品」与 DB 一致，此前未参与 Step2）──
+        try {
+          const propLinks = db.prepare('SELECT prop_id FROM storyboard_props WHERE storyboard_id = ?').all(row.storyboard_id);
+          const REF_CAP = 4; // 与 imageClient.callGeminiImageApi MAX_GEMINI_REF_IMAGES 对齐
+          for (const link of propLinks) {
+            if (refs.length >= REF_CAP) break;
+            const prop = db.prepare(
+              'SELECT name, image_url, local_path, ref_image, extra_images FROM props WHERE id = ? AND deleted_at IS NULL'
+            ).get(Number(link.prop_id));
+            if (!prop) continue;
+            let propRef = prop.ref_image || prop.local_path || prop.image_url;
+            if (!propRef && prop.extra_images) {
+              try {
+                const extras = typeof prop.extra_images === 'string' ? JSON.parse(prop.extra_images) : prop.extra_images;
+                if (Array.isArray(extras) && extras[0]) propRef = extras[0];
+              } catch (_) {}
+            }
+            if (propRef && !refs.includes(propRef)) {
+              refs.push(propRef);
+              refLabels.push(`Image ${refs.length}: prop/object appearance reference for "${prop.name || 'prop'}"`);
+            }
+          }
+        } catch (_) {}
         // ── 补充：从 storyboard_characters 关联表查 character_libraries 的四视图 URL ──
         // 角色库中生成了四视图（four_view_image_url）的角色优先作为参考图
         try {

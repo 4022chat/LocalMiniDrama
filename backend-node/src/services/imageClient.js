@@ -999,7 +999,7 @@ async function callGeminiImageApi(db, config, log, opts) {
   log.info('[Gemini图生] 参考图传输方式', { image_gen_id, use_image_proxy: useImageProxy });
 
   const rawRefs = Array.isArray(reference_image_urls) ? reference_image_urls.filter(Boolean) : [];
-  const MAX_GEMINI_REF_IMAGES = 4; // 场景1张 + 最多3个角色
+  const MAX_GEMINI_REF_IMAGES = 4; // 场景 + 角色/道具等合计最多 4 张（由 imageService 组装顺序决定）
 
   // 解析 system_prompt 中的每张参考图标签（格式: "Image N: description..."）
   // Gemini 多模态的正确输入结构：[文字说明] → [图片] → [文字说明] → [图片] → [生成指令]

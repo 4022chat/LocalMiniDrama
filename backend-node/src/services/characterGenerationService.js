@@ -4,6 +4,7 @@ const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
 const { safeParseAIJSON, extractFirstArray } = require('../utils/safeJson');
 const characterLibraryService = require('./characterLibraryService');
+const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
 
 /**
  * 从角色外貌描述中提炼 6层视觉锚点，写入 characters.identity_anchors
@@ -42,19 +43,14 @@ async function processCharacterGeneration(db, cfg, log, taskID, req) {
     return;
   }
   try {
-    const styleOverrides = {};
-    if (dramaRow.style && String(dramaRow.style).trim()) {
-      styleOverrides.default_style = String(dramaRow.style).trim();
-    }
+    let next = { ...cfg, style: { ...(cfg?.style || {}) } };
     if (dramaRow.metadata) {
       const meta = typeof dramaRow.metadata === 'string' ? JSON.parse(dramaRow.metadata) : dramaRow.metadata;
       if (meta && meta.aspect_ratio) {
-        styleOverrides.default_image_ratio = meta.aspect_ratio;
+        next.style.default_image_ratio = meta.aspect_ratio;
       }
     }
-    if (Object.keys(styleOverrides).length > 0) {
-      effectiveCfg = { ...cfg, style: { ...(cfg?.style || {}), ...styleOverrides } };
-    }
+    effectiveCfg = mergeCfgStyleWithDrama(next, dramaRow);
   } catch (_) {}
 
   if (!outlineText) {

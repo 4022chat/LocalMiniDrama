@@ -69,24 +69,29 @@ async function processBackgroundExtraction(db, cfg, log, taskID, episodeId, mode
     return;
   }
 
-  // 合并风格：优先用传入的 style 参数，其次用 drama.style，最后用 cfg.style.default_style（与角色/道具提取保持一致）
+  // 合并风格：显式 style 参数优先（一般为前端传来的英文 prompt）；否则用剧集 metadata 中的完整提示词
   let effectiveCfg = cfg;
   try {
     const dramaRow = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(episode.drama_id);
-    const resolvedStyle = (style && String(style).trim())
-      || (dramaRow?.style && String(dramaRow.style).trim())
-      || '';
-    const styleOverrides = {};
-    if (resolvedStyle) styleOverrides.default_style = resolvedStyle;
+    const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
+    const paramStyle = (style && String(style).trim()) || '';
+    let next = { ...cfg, style: { ...(cfg?.style || {}) } };
     if (dramaRow?.metadata) {
       const meta = typeof dramaRow.metadata === 'string' ? JSON.parse(dramaRow.metadata) : dramaRow.metadata;
-      if (meta?.aspect_ratio) styleOverrides.default_image_ratio = meta.aspect_ratio;
+      if (meta?.aspect_ratio) next.style.default_image_ratio = meta.aspect_ratio;
     }
-    if (Object.keys(styleOverrides).length > 0) {
-      effectiveCfg = { ...cfg, style: { ...(cfg?.style || {}), ...styleOverrides } };
+    if (paramStyle) {
+      next.style = {
+        ...next.style,
+        default_style_zh: paramStyle,
+        default_style_en: paramStyle,
+        default_style: paramStyle,
+      };
+      effectiveCfg = next;
+    } else {
+      effectiveCfg = mergeCfgStyleWithDrama(next, dramaRow);
     }
-    // 更新最终采用的风格，供后续异步生成使用
-    style = resolvedStyle || style;
+    style = paramStyle || effectiveCfg?.style?.default_style_en || effectiveCfg?.style?.default_style || style;
   } catch (_) {}
 
   const requestedLanguage = normalizeLanguage(language);

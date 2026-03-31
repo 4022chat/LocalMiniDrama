@@ -70,11 +70,25 @@ const path = require('path');
 const { randomUUID } = require('crypto');
 const videoClient = require('./videoClient');
 const taskService = require('./taskService');
+const storageLayout = require('./storageLayout');
 
-/** 将远程 video_url 下载到本地 storage/videos，返回相对路径（如 videos/xxx.mp4），失败返回 null */
-async function downloadVideoToLocal(storagePath, videoUrl, videoGenId, log) {
+/** @returns {{ dir: string, relPrefix: string }} 与图片 uploads 一致的工程子目录规则 */
+function resolveVideosDir(storagePath, projectSubdir) {
+  const sub = projectSubdir && String(projectSubdir).trim();
+  if (sub) {
+    const relPrefix = `${sub.replace(/\\/g, '/')}/videos`;
+    return { dir: path.join(storagePath, sub, 'videos'), relPrefix };
+  }
+  return { dir: path.join(storagePath, 'videos'), relPrefix: 'videos' };
+}
+
+/**
+ * 将远程 video_url 下载到本地
+ * @returns {string|null} 相对 storage 根的路径，如 projects/.../videos/vg_1_xxx.mp4；无工程时为 videos/...
+ */
+async function downloadVideoToLocal(storagePath, videoUrl, videoGenId, log, projectSubdir = null) {
   if (!videoUrl || typeof videoUrl !== 'string') return null;
-  const dir = path.join(storagePath, 'videos');
+  const { dir, relPrefix } = resolveVideosDir(storagePath, projectSubdir);
   try {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const ext = (videoUrl.split('?')[0].match(/\.(mp4|webm|mov)$/i) || [])[1] || 'mp4';
@@ -87,8 +101,8 @@ async function downloadVideoToLocal(storagePath, videoUrl, videoGenId, log) {
     }
     const buf = Buffer.from(await res.arrayBuffer());
     fs.writeFileSync(filePath, buf);
-    const relativePath = `videos/${name}`;
-    log.info('Video saved to local', { videoGenId, local_path: relativePath });
+    const relativePath = `${relPrefix}/${name}`.replace(/\\/g, '/');
+    log.info('Video saved to local', { videoGenId, local_path: relativePath, projectSubdir: projectSubdir || '(root)' });
     return relativePath;
   } catch (e) {
     log.warn('Download video error', { videoGenId, error: e.message });
@@ -167,7 +181,8 @@ async function processVideoGeneration(db, log, videoGenId) {
         const storagePath = path.isAbsolute(cfg.storage?.local_path)
           ? cfg.storage.local_path
           : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
-        localPath = await downloadVideoToLocal(storagePath, result.video_url, videoGenId, log);
+        const projectSubdir = storageLayout.getProjectStorageSubdir(db, row.drama_id);
+        localPath = await downloadVideoToLocal(storagePath, result.video_url, videoGenId, log, projectSubdir);
       } catch (_) {}
       try {
         db.prepare(
@@ -209,7 +224,8 @@ async function processVideoGeneration(db, log, videoGenId) {
           const storagePath = path.isAbsolute(cfg.storage?.local_path)
             ? cfg.storage.local_path
             : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
-          localPath = await downloadVideoToLocal(storagePath, pollResult.video_url, videoGenId, log);
+          const projectSubdir = storageLayout.getProjectStorageSubdir(db, row.drama_id);
+          localPath = await downloadVideoToLocal(storagePath, pollResult.video_url, videoGenId, log, projectSubdir);
         } catch (_) {}
         try {
           db.prepare(

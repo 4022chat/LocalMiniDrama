@@ -1,6 +1,8 @@
+const path = require('path');
 const multer = require('multer');
 const response = require('../response');
 const uploadService = require('../services/uploadService');
+const storageLayout = require('../services/storageLayout');
 
 const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
 const maxSize = 16 * 1024 * 1024; // 16MB，单张图片上限
@@ -19,7 +21,7 @@ const upload = multer({
   },
 });
 
-function routes(cfg, log) {
+function routes(cfg, log, db) {
   const singleUpload = upload.single('file');
   return {
     multerSingle: singleUpload,
@@ -28,8 +30,22 @@ function routes(cfg, log) {
         return response.badRequest(res, '请选择文件');
       }
       try {
-        const storagePath = cfg?.storage?.local_path || './data/storage';
+        const rawStorage = cfg?.storage?.local_path || './data/storage';
+        const storagePath = path.isAbsolute(rawStorage)
+          ? rawStorage
+          : path.join(process.cwd(), rawStorage);
         const baseUrl = cfg?.storage?.base_url || '';
+        let projectSubdir = null;
+        if (db) {
+          const raw = req.body?.drama_id;
+          const did =
+            raw !== undefined && raw !== null && String(raw).trim() !== ''
+              ? Number(raw)
+              : NaN;
+          if (Number.isFinite(did) && did > 0) {
+            projectSubdir = storageLayout.getProjectStorageSubdir(db, did);
+          }
+        }
         const result = uploadService.uploadFile(
           storagePath,
           baseUrl,
@@ -37,7 +53,8 @@ function routes(cfg, log) {
           req.file.buffer,
           req.file.originalname || 'image.png',
           req.file.mimetype,
-          'uploads'
+          'uploads',
+          projectSubdir
         );
         response.success(res, {
           url: result.url,

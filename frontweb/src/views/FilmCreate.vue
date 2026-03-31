@@ -1,5 +1,5 @@
 <template>
-  <div class="film-create">
+  <div class="film-create" :class="{ 'sidebar-collapsed': navCollapsed }">
     <!-- 顶部 -->
     <header class="header">
       <div class="header-inner">
@@ -26,10 +26,13 @@
       </div>
     </header>
 
-    <!-- 左侧快捷目录 -->
+    <!-- 左侧固定侧边栏 -->
     <nav class="quick-nav" :class="{ collapsed: navCollapsed }" aria-label="快捷导航">
-      <div class="nav-toggle" :title="navCollapsed ? '展开导航' : '收起导航'" @click="toggleNav()">
-        <el-icon><ArrowLeft v-if="!navCollapsed" /><ArrowRight v-else /></el-icon>
+      <div class="nav-sidebar-header">
+        <span v-if="!navCollapsed" class="nav-sidebar-title">导航</span>
+        <div class="nav-toggle" :title="navCollapsed ? '展开导航' : '收起导航'" @click="toggleNav()">
+          <el-icon><Expand v-if="navCollapsed" /><Fold v-else /></el-icon>
+        </div>
       </div>
 
       <!-- 步骤列表 -->
@@ -609,6 +612,22 @@
             <span class="sb-config-hint">四/九宫格自动按视角拆分</span>
           </label>
         </div>
+        <div class="sb-config-row sb-narration-export-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:12px">
+          <el-checkbox v-model="storyboardIncludeNarration" @change="saveProjectSettings">
+            生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
+          </el-checkbox>
+          <el-button
+            v-if="storyboards.length > 0"
+            class="sb-export-srt-btn"
+            size="small"
+            plain
+            type="primary"
+            :disabled="!currentEpisodeId"
+            @click="onExportNarrationSrt"
+          >
+            导出解说 SRT
+          </el-button>
+        </div>
         <div class="asset-actions sb-batch-actions">
           <div class="flex">
             <el-button
@@ -861,6 +880,32 @@
                 <span class="sb-prompt-text">{{ sb.image_prompt || '暂无图片提示词' }}</span>
                 <el-button size="small" link type="primary" @click="onOpenSbPromptDialog(sb)">编辑</el-button>
               </div>
+              <template v-if="storyboardIncludeNarration || (sbNarration[sb.id] || '').trim() || (sb.narration || '').trim()">
+                <div class="sb-prompt-label">
+                  <span class="sb-dot"></span>
+                  <span>解说旁白</span>
+                </div>
+                <el-input
+                  v-model="sbNarration[sb.id]"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="本镜解说文案（画外音 / 纪录片式旁白，供 TTS 或导出 SRT）"
+                  class="sb-narration-input"
+                  @blur="() => onSaveSbNarrationField(sb)"
+                />
+                <div v-if="(sbNarration[sb.id] || sb.narration || '').toString().trim()" class="sb-narration-actions">
+                  <el-tooltip content="解说旁白配音（TTS）" placement="top">
+                    <el-button size="small" :loading="ttsSbNarrationIds.has(sb.id)" @click="onTtsSbNarration(sb)">
+                      解说配音
+                    </el-button>
+                  </el-tooltip>
+                  <el-tooltip v-if="sbNarrationAudioRelPath(sb)" content="播放解说旁白配音" placement="top">
+                    <el-button size="small" @click="playSbNarrationTts(sb)">
+                      <el-icon><VideoPlay /></el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
+              </template>
             </div>
             <!-- 中：分镜图（优先用 /images?storyboard_id 拉取到的图，否则用 composed_image） -->
             <div class="sb-panel sb-image">
@@ -998,13 +1043,14 @@
                 <el-button size="small" :loading="generatingSbVideoIds.has(sb.id)" :disabled="!sb.video_prompt" @click="onGenerateSbVideo(sb)">重新生成</el-button>
                 <el-tooltip v-if="sb.dialogue" content="对白配音（TTS）" placement="top">
                   <el-button size="small" :loading="ttsSbIds.has(sb.id)" @click="onTtsSbDialogue(sb)">
-                    配音
+                    对白配音
                   </el-button>
                 </el-tooltip>
-              </div>
-              <!-- TTS 音频播放 -->
-              <div v-if="sbAudioPaths[sb.id]" class="sb-audio-player">
-                <audio :src="'/static/' + sbAudioPaths[sb.id]" controls style="width:100%;height:32px" />
+                <el-tooltip v-if="sb.dialogue && sbDialogueAudioRelPath(sb)" content="播放对白配音" placement="top">
+                  <el-button size="small" @click="playSbDialogueTts(sb)">
+                    <el-icon><VideoPlay /></el-icon>
+                  </el-button>
+                </el-tooltip>
               </div>
               <div class="sb-video-prompt-label">
                 <span class="sb-dot"></span>
@@ -1037,6 +1083,7 @@
               <el-option label="1080p" value="1080p" />
             </el-select>
           </el-form-item>
+          <!--
           <el-form-item label="配乐">
             <el-select v-model="videoMusic" placeholder="无" clearable style="width: 160px">
               <el-option label="无" value="" />
@@ -1053,11 +1100,32 @@
               <el-option label="中" value="medium" />
             </el-select>
           </el-form-item>
+          -->
           <el-form-item label="字幕">
-            <el-switch v-model="videoSubtitle" />
+            <div class="video-option-row">
+              <el-switch v-model="videoSubtitle" />
+              <span v-if="videoSubtitle" class="video-option-hint">开启后，合成整集时会检测解说旁白：若有文案则自动生成 SRT、按分镜时长合成旁白语音（过长加速 / 过短补静音）、与成片对齐后烧录字幕并混音。</span>
+            </div>
+          </el-form-item>
+          <el-form-item label="对白烧录">
+            <div class="video-option-row">
+              <el-switch v-model="videoBurnDialogue" />
+              <span v-if="videoBurnDialogue" class="video-option-hint">开启后，将把各镜「配音」生成的对白 TTS 按分镜时长对齐并混入整集成片（无对白音频的分镜为静音）。可与「字幕」旁白同时开启，两条音轨会叠混。</span>
+            </div>
           </el-form-item>
           <el-form-item label="水印">
-            <el-switch v-model="videoWatermark" />
+            <div class="video-option-row">
+              <el-switch v-model="videoWatermark" />
+              <el-input
+                v-if="videoWatermark"
+                v-model="videoWatermarkText"
+                placeholder="右下角水印文字"
+                maxlength="200"
+                show-word-limit
+                clearable
+                class="video-watermark-input"
+              />
+            </div>
           </el-form-item>
         </div>
         <p class="config-tip">文本/图片/视频使用的模型以「<el-link type="primary" :underline="false" @click="showAiConfigDialog = true">AI 配置</el-link>」中设为默认的为准。</p>
@@ -1750,6 +1818,9 @@
         <el-form-item label="对白">
           <el-input v-model="sbDialogue[videoParamsTarget.id]" type="textarea" :rows="2" placeholder="角色对白" />
         </el-form-item>
+        <el-form-item label="解说旁白">
+          <el-input v-model="sbNarration[videoParamsTarget.id]" type="textarea" :rows="2" class="sb-narration-input" placeholder="画外解说 / 纪录片式旁白（与对白分开）" />
+        </el-form-item>
         <el-form-item label="画面结果">
           <el-input v-model="sbResult[videoParamsTarget.id]" type="textarea" :rows="2" placeholder="动作完成后的画面结果" />
         </el-form-item>
@@ -1834,7 +1905,7 @@ import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick } from 'v
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document, InfoFilled, Refresh, ZoomIn, QuestionFilled, DocumentAdd } from '@element-plus/icons-vue'
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Setting, Plus, Minus, Sunny, Moon, MagicStick, Upload, Delete, Check, Loading, WarningFilled, User, Box, Picture, Film, VideoCamera, Document, InfoFilled, Refresh, ZoomIn, QuestionFilled, DocumentAdd, Expand, Fold, VideoPlay } from '@element-plus/icons-vue'
 import { useTheme } from '@/composables/useTheme'
 import { useFilmStore } from '@/stores/film'
 import { dramaAPI } from '@/api/drama'
@@ -1854,7 +1925,7 @@ import { propLibraryAPI } from '@/api/propLibrary'
 import { generationSettingsAPI } from '@/api/prompts'
 import StylePickerButton from '@/components/StylePickerButton.vue'
 import AIConfigContent from '@/components/AIConfigContent.vue'
-import { generationStyleOptions, getStylePromptEn, getStylePromptZh } from '@/constants/styleOptions'
+import { generationStyleOptions, getStylePromptEn, getStylePromptZh, stylePromptMetadataForSave, backfillDramaStylePromptMetadataIfNeeded } from '@/constants/styleOptions'
 import { useNavigation } from '@/composables/filmCreate/useNavigation'
 import { useCharacters } from '@/composables/filmCreate/useCharacters'
 import { useProps as usePropsComposable } from '@/composables/filmCreate/useProps'
@@ -1927,6 +1998,11 @@ function getSelectedStylePromptZh() {
   if (opt) return opt.prompt || opt.promptEn || val
   return val
 }
+
+/** 保存剧集时写入 metadata，供后端提示词使用（与 dramas.style 选项 value 对应） */
+function projectStylePromptMetadata() {
+  return stylePromptMetadataForSave(generationStyle.value)
+}
 const scriptContent = computed({
   get: () => store.scriptContent,
   set: (v) => store.setScriptContent(v)
@@ -1936,7 +2012,11 @@ const videoMusic = ref('')
 const videoSfx = ref('')
 const videoQuality = ref('high')
 const videoSubtitle = ref(true)
+/** 合成整集时把各镜对白 TTS（audio_local_path）按分镜时长对齐并混入成片 */
+const videoBurnDialogue = ref(false)
 const videoWatermark = ref(false)
+/** 水印开启时烧录到成片右下角 */
+const videoWatermarkText = ref('')
 
 const dramaId = computed(() => store.dramaId)
 const characters = computed(() => store.characters)
@@ -2188,6 +2268,7 @@ const sbCharacterIds = ref({})  // sbId -> number[] 多选角色
 const sbPropIds = ref({})       // sbId -> number[] 多选物品
 const sbSceneId = ref({})
 const sbDialogue = ref({})
+const sbNarration = ref({})
 const sbShotType = ref({})
 /** 视频提示词组成（可编辑），key 为分镜 id */
 const sbTitle = ref({})
@@ -2235,7 +2316,13 @@ const upscalingSbIds = reactive(new Set())
 const generatingSceneMultiViewIds = reactive(new Set())
 // P2-4: TTS 状态
 const ttsSbIds = reactive(new Set())
-const sbAudioPaths = ref({})
+const ttsSbNarrationIds = reactive(new Set())
+/** 对白 TTS 路径缓存（与 storyboards.audio_local_path 一致） */
+const sbDialogueAudioPaths = ref({})
+/** 解说旁白 TTS 路径缓存（与 storyboards.narration_audio_local_path 一致） */
+const sbNarrationAudioPaths = ref({})
+/** 分镜 TTS 试听：避免多条同时播放 */
+let sbTtsPreviewAudio = null
 /** 正在编辑视频提示词的分镜 id；编辑中显示文本框与保存/取消 */
 const editingSbVideoPromptId = ref(null)
 const editingSbVideoPromptText = ref('')
@@ -2263,6 +2350,8 @@ const dragOverSbId = ref(null)
 // 公共库弹窗状态已移至各 composable
 const storyboardCount = ref(null) // 分镜数量
 const videoDuration = ref(null) // 视频总长度
+/** 分镜生成时是否要求 AI 输出 narration（解说旁白） */
+const storyboardIncludeNarration = ref(false)
 const gridMode = ref('single') // 序列图模式：single / quad_grid / nine_grid
 
 
@@ -2716,7 +2805,7 @@ async function doUploadSbImage(sbId, file) {
   if (!file || !sbId || !dramaId.value) return
   uploadingSbImageId.value = sbId
   try {
-    const res = await uploadAPI.uploadImage(file)
+    const res = await uploadAPI.uploadImage(file, { dramaId: dramaId.value })
     const url = res?.url || res?.path
     const localPath = res?.local_path
     if (!url && !localPath) {
@@ -2760,6 +2849,7 @@ function syncStoryboardStateFromEpisode(ep) {
   const nextPropIds = {}
   const nextScene = {}
   const nextDialogue = {}
+  const nextNarration = {}
   const nextShot = {}
   const nextTitle = {}
   const nextLocation = {}
@@ -2778,6 +2868,7 @@ function syncStoryboardStateFromEpisode(ep) {
   for (const sb of boards) {
     nextScene[sb.id] = sb.scene_id ?? null
     nextDialogue[sb.id] = sb.dialogue ?? ''
+    nextNarration[sb.id] = sb.narration ?? ''
     nextShot[sb.id] = (sb.shot_type ?? '').toString() || ''
     nextTitle[sb.id] = (sb.title ?? '').toString()
     nextLocation[sb.id] = (sb.location ?? '').toString()
@@ -2801,6 +2892,7 @@ function syncStoryboardStateFromEpisode(ep) {
   sbPropIds.value = nextPropIds
   sbSceneId.value = nextScene
   sbDialogue.value = nextDialogue
+  sbNarration.value = nextNarration
   sbShotType.value = nextShot
   sbTitle.value = nextTitle
   sbLocation.value = nextLocation
@@ -2839,7 +2931,8 @@ function onEpisodeSelect(epId) {
 async function loadDrama() {
   if (!store.dramaId) return
   try {
-    const d = await dramaAPI.get(store.dramaId)
+    let d = await dramaAPI.get(store.dramaId)
+    d = await backfillDramaStylePromptMetadataIfNeeded(dramaAPI, store.dramaId, d)
     store.setDrama(d)
     // 恢复「故事生成」框的梗概（项目 description 存的是故事梗概）
     storyInput.value = (d.description || '').toString().trim()
@@ -2848,6 +2941,7 @@ async function loadDrama() {
     generationStyle.value = d.style || ''
     projectAspectRatio.value = (d.metadata && d.metadata.aspect_ratio) ? d.metadata.aspect_ratio : '16:9'
     videoClipDuration.value = (d.metadata && d.metadata.video_clip_duration) ? Number(d.metadata.video_clip_duration) : 5
+    storyboardIncludeNarration.value = !!(d.metadata && d.metadata.storyboard_include_narration)
     const list = d.episodes || []
     // 优先保持当前选中的集（按 id 在最新列表中查找），避免 AI 生成角色等操作后误切到其他集
     const currentId = selectedEpisodeId.value
@@ -3034,7 +3128,11 @@ async function saveScriptToBackend(content) {
       description: storyInput.value?.trim() || trimmed.slice(0, 200),
       genre: storyType.value || undefined,
       style: generationStyle.value || undefined,
-      metadata: { story_style: storyStyle.value || undefined, aspect_ratio: projectAspectRatio.value || '16:9' }
+      metadata: {
+        ...projectStylePromptMetadata(),
+        story_style: storyStyle.value || undefined,
+        aspect_ratio: projectAspectRatio.value || '16:9',
+      }
     })
     store.setDrama(drama)
     dramaId = drama.id
@@ -3069,7 +3167,11 @@ async function saveScriptToBackend(content) {
       summary: storyInput.value.trim(),
       genre: storyType.value || undefined,
       style: generationStyle.value || undefined,
-      metadata: { story_style: storyStyle.value || undefined, aspect_ratio: projectAspectRatio.value || '16:9' }
+      metadata: {
+        ...projectStylePromptMetadata(),
+        story_style: storyStyle.value || undefined,
+        aspect_ratio: projectAspectRatio.value || '16:9',
+      }
     }).catch(() => {})
   }
   await loadDrama()
@@ -3082,9 +3184,11 @@ async function saveProjectSettings() {
     genre: storyType.value || undefined,
     style: generationStyle.value || undefined,
     metadata: {
+      ...projectStylePromptMetadata(),
       story_style: storyStyle.value || undefined,
       aspect_ratio: projectAspectRatio.value || '16:9',
       video_clip_duration: videoClipDuration.value || 5,
+      storyboard_include_narration: !!storyboardIncludeNarration.value,
     }
   }).catch(e => console.error('Settings auto-save failed', e))
 }
@@ -3121,7 +3225,11 @@ async function onGenerateStory() {
           description: text,
           genre: storyType.value || undefined,
           style: generationStyle.value || undefined,
-          metadata: { story_style: storyStyle.value || undefined, aspect_ratio: projectAspectRatio.value || '16:9' }
+          metadata: {
+            ...projectStylePromptMetadata(),
+            story_style: storyStyle.value || undefined,
+            aspect_ratio: projectAspectRatio.value || '16:9',
+          }
         })
         store.setDrama(drama)
         dramaId = drama.id
@@ -3144,7 +3252,11 @@ async function onGenerateStory() {
         summary: text,
         genre: storyType.value || undefined,
         style: generationStyle.value || undefined,
-        metadata: { story_style: storyStyle.value || undefined, aspect_ratio: projectAspectRatio.value || '16:9' }
+        metadata: {
+          ...projectStylePromptMetadata(),
+          story_style: storyStyle.value || undefined,
+          aspect_ratio: projectAspectRatio.value || '16:9',
+        }
       }).catch(() => {})
 
       await loadDrama()
@@ -3312,7 +3424,7 @@ async function doUploadResourceImage(type, id, file) {
   const key = type === 'character' ? 'char-' : type === 'prop' ? 'prop-' : 'scene-'
   uploadingResourceId.value = key + id
   try {
-    const res = await uploadAPI.uploadImage(file)
+    const res = await uploadAPI.uploadImage(file, { dramaId: dramaId.value })
     const data = res?.data ?? res
     const uploadedLocalPath = data?.local_path || data?.path || null
     const url = data?.url || uploadedLocalPath
@@ -3472,6 +3584,59 @@ async function onUpscaleSbImage(sb) {
   }
 }
 
+function normalizeAudioRelPath(raw) {
+  const s = String(raw != null ? raw : '').trim().replace(/^\//, '')
+  return s
+}
+
+/** 对白 TTS 相对路径 */
+function sbDialogueAudioRelPath(sb) {
+  if (!sb?.id) return ''
+  const fromCache = sbDialogueAudioPaths.value[sb.id]
+  const fromRow = sb.audio_local_path
+  const raw = (fromCache != null && String(fromCache).trim() !== '') ? fromCache : (fromRow != null ? fromRow : '')
+  return normalizeAudioRelPath(raw)
+}
+
+/** 解说旁白 TTS 相对路径 */
+function sbNarrationAudioRelPath(sb) {
+  if (!sb?.id) return ''
+  const fromCache = sbNarrationAudioPaths.value[sb.id]
+  const fromRow = sb.narration_audio_local_path
+  const raw = (fromCache != null && String(fromCache).trim() !== '') ? fromCache : (fromRow != null ? fromRow : '')
+  return normalizeAudioRelPath(raw)
+}
+
+function playSbTtsFromRel(rel) {
+  if (!rel) return
+  const url = `/static/${rel}`
+  try {
+    if (sbTtsPreviewAudio) {
+      sbTtsPreviewAudio.pause()
+      sbTtsPreviewAudio = null
+    }
+    const a = new Audio(url)
+    sbTtsPreviewAudio = a
+    a.addEventListener('ended', () => {
+      if (sbTtsPreviewAudio === a) sbTtsPreviewAudio = null
+    })
+    a.play().catch(() => {
+      ElMessage.warning('无法播放音频，请检查文件是否存在')
+      if (sbTtsPreviewAudio === a) sbTtsPreviewAudio = null
+    })
+  } catch (_) {
+    ElMessage.warning('无法播放音频')
+  }
+}
+
+function playSbDialogueTts(sb) {
+  playSbTtsFromRel(sbDialogueAudioRelPath(sb))
+}
+
+function playSbNarrationTts(sb) {
+  playSbTtsFromRel(sbNarrationAudioRelPath(sb))
+}
+
 /** P2-4: 为分镜对白生成 TTS 配音 */
 async function onTtsSbDialogue(sb) {
   if (!sb?.id || ttsSbIds.has(sb.id)) return
@@ -3484,12 +3649,16 @@ async function onTtsSbDialogue(sb) {
     const res = await fetch('/api/v1/audio/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ storyboard_id: sb.id, text: sb.dialogue }),
+      body: JSON.stringify({ storyboard_id: sb.id, text: sb.dialogue, tts_kind: 'dialogue' }),
     })
     const data = await res.json()
-    if (!res.ok || data.code !== 200) throw new Error(data.message || '配音失败')
+    const businessOk = data.success === true || Number(data.code) === 200
+    if (!res.ok || !businessOk) {
+      throw new Error(data.error?.message || data.message || '配音失败')
+    }
     if (data.data?.local_path) {
-      sbAudioPaths.value = { ...sbAudioPaths.value, [sb.id]: data.data.local_path }
+      sbDialogueAudioPaths.value = { ...sbDialogueAudioPaths.value, [sb.id]: data.data.local_path }
+      sb.audio_local_path = data.data.local_path
       ElMessage.success('配音已生成')
     }
   } catch (e) {
@@ -3497,6 +3666,98 @@ async function onTtsSbDialogue(sb) {
   } finally {
     ttsSbIds.delete(sb.id)
   }
+}
+
+/** 为分镜解说旁白生成 TTS（与对白共用接口，文本不同） */
+async function onTtsSbNarration(sb) {
+  if (!sb?.id || ttsSbNarrationIds.has(sb.id)) return
+  const text = ((sbNarration.value[sb.id] ?? sb.narration) || '').toString().trim()
+  if (!text) {
+    ElMessage.warning('该分镜没有解说旁白内容')
+    return
+  }
+  ttsSbNarrationIds.add(sb.id)
+  try {
+    const res = await fetch('/api/v1/audio/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ storyboard_id: sb.id, text, tts_kind: 'narration' }),
+    })
+    const data = await res.json()
+    const businessOk = data.success === true || Number(data.code) === 200
+    if (!res.ok || !businessOk) {
+      throw new Error(data.error?.message || data.message || '解说配音失败')
+    }
+    if (data.data?.local_path) {
+      sbNarrationAudioPaths.value = { ...sbNarrationAudioPaths.value, [sb.id]: data.data.local_path }
+      sb.narration_audio_local_path = data.data.local_path
+      ElMessage.success('解说配音已生成')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || '解说 TTS 失败')
+  } finally {
+    ttsSbNarrationIds.delete(sb.id)
+  }
+}
+
+function formatSrtTimestamp(ms) {
+  if (!Number.isFinite(ms) || ms < 0) ms = 0
+  const h = Math.floor(ms / 3600000)
+  const m = Math.floor((ms % 3600000) / 60000)
+  const s = Math.floor((ms % 60000) / 1000)
+  const z = Math.floor(ms % 1000)
+  const p2 = (n) => String(n).padStart(2, '0')
+  return `${p2(h)}:${p2(m)}:${p2(s)},${String(z).padStart(3, '0')}`
+}
+
+/** 按分镜顺序与 duration 累计时间轴，导出非空解说为 SRT */
+function onExportNarrationSrt() {
+  const boards = storyboards.value || []
+  if (!boards.length) {
+    ElMessage.warning('暂无分镜')
+    return
+  }
+  let tMs = 0
+  const lines = []
+  let idx = 1
+  for (const sb of boards) {
+    const durSec = Number(sbDuration.value[sb.id] ?? sb.duration)
+    const sec = Number.isFinite(durSec) && durSec > 0 ? durSec : 5
+    const durMs = Math.round(sec * 1000)
+    const text = ((sbNarration.value[sb.id] ?? sb.narration) || '').toString().trim()
+    if (text) {
+      const start = formatSrtTimestamp(tMs)
+      const end = formatSrtTimestamp(tMs + durMs)
+      lines.push(String(idx++), `${start} --> ${end}`, text, '')
+    }
+    tMs += durMs
+  }
+  if (!lines.length) {
+    ElMessage.warning('当前分镜没有可导出的解说文案')
+    return
+  }
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `narration-${currentEpisodeId.value || 'episode'}.srt`
+  a.click()
+  URL.revokeObjectURL(a.href)
+  ElMessage.success('已下载解说 SRT')
+}
+
+async function onSaveSbNarrationField(sb) {
+  if (!sb?.id) return
+  const next = (sbNarration.value[sb.id] || '').toString().trim()
+  const prev = (sb.narration || '').toString().trim()
+  if (next === prev) return
+  try {
+    await storyboardsAPI.update(sb.id, { narration: next || null })
+    const list = store.currentEpisode?.storyboards
+    if (Array.isArray(list)) {
+      const row = list.find((x) => Number(x.id) === Number(sb.id))
+      if (row) row.narration = next || null
+    }
+  } catch (_) { /* 静默失败，避免打断输入 */ }
 }
 
 /** P2-3: 生成场景多视角图 */
@@ -3639,6 +3900,8 @@ function buildVideoPromptFromFields(sbId) {
   if (action) parts.push('动作：' + action)
   const dialogue = (sbDialogue.value[sbId] || '').toString().trim()
   if (dialogue) parts.push('对话：' + dialogue)
+  const narr = (sbNarration.value[sbId] || '').toString().trim()
+  if (narr) parts.push('解说旁白：' + narr)
   const shotType = (sbShotType.value[sbId] || '').toString().trim()
   if (shotType) parts.push('景别：' + shotType)
   // 优先使用结构化三元组：中文标签 + 英文描述（兼顾中英文视频模型）
@@ -3675,6 +3938,7 @@ async function onSaveSbVideoFields(sb) {
       duration: Number(sbDuration.value[sb.id]) || 5,
       action: (sbAction.value[sb.id] || '').toString().trim() || null,
       dialogue: (sbDialogue.value[sb.id] || '').toString().trim() || null,
+      narration: (sbNarration.value[sb.id] || '').toString().trim() || null,
       atmosphere: (sbAtmosphere.value[sb.id] || '').toString().trim() || null,
       result: (sbResult.value[sb.id] || '').toString().trim() || null,
       angle: (sbAngle.value[sb.id] || '').toString().trim() || null,
@@ -3821,7 +4085,8 @@ async function onGenerateStoryboard() {
       style: getSelectedStyle(),
       storyboard_count: storyboardCount.value || undefined,
       video_duration: videoDuration.value || undefined,
-      aspect_ratio: projectAspectRatio.value
+      aspect_ratio: projectAspectRatio.value,
+      include_narration: !!storyboardIncludeNarration.value,
     })
     const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
     if (taskId) {
@@ -4020,7 +4285,7 @@ async function startBatchVideoGeneration() {
                 const lastFrameBlob = await captureVideoLastFrame(prevVideoUrl)
                 if (lastFrameBlob) {
                   const file = new File([lastFrameBlob], 'continuity_frame.jpg', { type: 'image/jpeg' })
-                  const uploadRes = await uploadAPI.uploadImage(file)
+                  const uploadRes = await uploadAPI.uploadImage(file, { dramaId: dramaId.value })
                   if (uploadRes?.local_path) {
                     contiguityFirstFrameUrl = toAbsoluteImageUrl('/static/' + uploadRes.local_path.replace(/^\//, ''))
                   }
@@ -4079,13 +4344,21 @@ async function startBatchVideoGeneration() {
   }
 }
 
+function getFinalizeMergeOptions() {
+  return {
+    burn_narration_subtitles: !!videoSubtitle.value,
+    burn_dialogue_audio: !!videoBurnDialogue.value,
+    watermark_text: videoWatermark.value ? String(videoWatermarkText.value || '').trim().slice(0, 200) : '',
+  }
+}
+
 async function onGenerateVideo() {
   if (!currentEpisodeId.value) return
   store.setVideoStatus('generating')
   store.setVideoProgress(5)
   videoErrorMsg.value = ''
   try {
-    const result = await dramaAPI.finalizeEpisode(currentEpisodeId.value)
+    const result = await dramaAPI.finalizeEpisode(currentEpisodeId.value, getFinalizeMergeOptions())
     if (result?.task_id != null) {
       store.setVideoProgress(10)
       ElMessage.success(result?.message || '视频合成任务已提交，请稍后查看')
@@ -4388,6 +4661,7 @@ async function runOneClickPipeline() {
           aspect_ratio: projectAspectRatio.value,
           storyboard_count: storyboardCount.value || undefined,
           video_duration: videoDuration.value || undefined,
+          include_narration: !!storyboardIncludeNarration.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {
@@ -4636,7 +4910,7 @@ async function runOneClickPipeline() {
     await checkPause()
     setPipelineStep(10, '合成整集视频...')
     try {
-      const result = await dramaAPI.finalizeEpisode(episodeId)
+      const result = await dramaAPI.finalizeEpisode(episodeId, getFinalizeMergeOptions())
       if (result?.task_id != null) {
         const pollResult = await pollTaskWithPause(result.task_id, () => loadDrama())
         if (pollResult?.paused) { await waitForResume(); return }
@@ -4842,6 +5116,7 @@ async function runRepairPipeline() {
           aspect_ratio: projectAspectRatio.value,
           storyboard_count: storyboardCount.value || undefined,
           video_duration: videoDuration.value || undefined,
+          include_narration: !!storyboardIncludeNarration.value,
         })
         const taskId = res?.task_id ?? (typeof res === 'string' ? res : null)
         if (taskId) {
@@ -4926,7 +5201,7 @@ async function runRepairPipeline() {
     await checkPause()
     pipelineCurrentStep.value = '正在生成整集视频...'
     try {
-      const result = await dramaAPI.finalizeEpisode(episodeId)
+      const result = await dramaAPI.finalizeEpisode(episodeId, getFinalizeMergeOptions())
       if (result?.task_id != null) {
         const pollResult = await pollTaskWithPause(result.task_id, () => loadDrama())
         if (pollResult?.paused) { await waitForResume(); return }
@@ -4978,37 +5253,42 @@ onMounted(() => {
 <style scoped>
 .film-create {
   min-height: 100vh;
-  background: #0f0f12;
+  background: #09090b;
   background-image:
-    radial-gradient(ellipse 80% 50% at 20% -20%, rgba(120, 60, 220, 0.18) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 80% 110%, rgba(60, 100, 220, 0.12) 0%, transparent 60%);
+    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(124, 58, 237, 0.15) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 40% at 85% 110%, rgba(56, 89, 209, 0.10) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(15, 15, 20, 0) 0%, #09090b 100%);
   color: #e4e4e7;
 }
 html.light .film-create {
-  background: #f5f3ff;
+  background: #f8f7ff;
   background-image:
-    radial-gradient(ellipse 80% 50% at 20% -20%, rgba(139, 92, 246, 0.12) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 80% 110%, rgba(99, 102, 241, 0.08) 0%, transparent 60%);
+    radial-gradient(ellipse 80% 50% at 10% -10%, rgba(139, 92, 246, 0.08) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 40% at 85% 110%, rgba(99, 102, 241, 0.06) 0%, transparent 50%);
+  color: #1e1b4b;
 }
 .header {
-  background: rgba(18, 18, 22, 0.82);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(139, 92, 246, 0.18);
-  padding: 12px 24px;
+  background: rgba(9, 9, 11, 0.75);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.12);
+  padding: 10px 28px;
   position: sticky;
   top: 0;
   z-index: 200;
-  box-shadow: 0 2px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03), 0 4px 24px rgba(0, 0, 0, 0.4);
+  margin-left: 180px;
+  transition: margin-left 0.25s cubic-bezier(.4,0,.2,1);
+}
+.sidebar-collapsed .header {
+  margin-left: 48px;
 }
 html.light .header {
-  background: rgba(255, 255, 255, 0.85) !important;
-  border-bottom-color: rgba(139, 92, 246, 0.2) !important;
-  box-shadow: 0 2px 16px rgba(139, 92, 246, 0.08) !important;
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-bottom-color: rgba(139, 92, 246, 0.1) !important;
+  box-shadow: 0 1px 0 rgba(139,92,246,0.06), 0 4px 20px rgba(139, 92, 246, 0.05) !important;
 }
 .header-inner {
-  max-width: min(1400px, 96vw);
-  margin: 0 auto;
   display: flex;
   align-items: center;
   gap: 16px;
@@ -5024,22 +5304,24 @@ html.light .header {
 }
 .logo:hover { filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.5)); }
 .logo-main {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #c4b5fd 0%, #818cf8 50%, #a78bfa 100%);
+  background: linear-gradient(135deg, #e0d4fc 0%, #a78bfa 50%, #818cf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  letter-spacing: -0.01em;
 }
 .logo-sub {
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   font-weight: 400;
-  letter-spacing: 0.02em;
-  color: #6d6d7a;
-  -webkit-text-fill-color: #6d6d7a;
+  letter-spacing: 0.04em;
+  color: #3f3f46;
+  -webkit-text-fill-color: #3f3f46;
+  text-transform: uppercase;
 }
 html.light .logo-main {
-  background: linear-gradient(135deg, #7c3aed, #6366f1);
+  background: linear-gradient(135deg, #6d28d9, #4f46e5);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -5049,21 +5331,21 @@ html.light .logo-sub {
   -webkit-text-fill-color: #9ca3af;
 }
 .breadcrumb-sep {
-  color: #3f3f46;
-  font-size: 1rem;
+  color: #27272a;
+  font-size: 0.9rem;
   font-weight: 300;
   flex-shrink: 0;
   user-select: none;
 }
 html.light .breadcrumb-sep { color: #d1d5db; }
 .page-title {
-  font-size: 0.88rem;
+  font-size: 0.82rem;
   font-weight: 500;
-  color: #a1a1aa;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #71717a;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
-  padding: 3px 10px;
+  padding: 4px 12px;
   max-width: 220px;
   white-space: nowrap;
   overflow: hidden;
@@ -5071,8 +5353,8 @@ html.light .breadcrumb-sep { color: #d1d5db; }
 }
 html.light .page-title {
   color: #6b7280;
-  background: rgba(99, 102, 241, 0.06);
-  border-color: rgba(99, 102, 241, 0.15);
+  background: rgba(99, 102, 241, 0.04);
+  border-color: rgba(99, 102, 241, 0.1);
 }
 .btn-back-drama {
   flex-shrink: 0;
@@ -5084,66 +5366,66 @@ html.light .page-title {
   flex-shrink: 0;
 }
 .btn-theme {
-  --el-button-bg-color: rgba(148, 163, 184, 0.1);
-  --el-button-border-color: rgba(148, 163, 184, 0.3);
-  --el-button-text-color: #94a3b8;
-  --el-button-hover-bg-color: rgba(148, 163, 184, 0.2);
-  --el-button-hover-border-color: rgba(148, 163, 184, 0.5);
-  --el-button-hover-text-color: #cbd5e1;
-  transition: all 0.2s;
+  --el-button-bg-color: rgba(255, 255, 255, 0.04);
+  --el-button-border-color: rgba(255, 255, 255, 0.08);
+  --el-button-text-color: #71717a;
+  --el-button-hover-bg-color: rgba(255, 255, 255, 0.08);
+  --el-button-hover-border-color: rgba(139, 92, 246, 0.25);
+  --el-button-hover-text-color: #a78bfa;
+  transition: all 0.2s ease;
 }
 html.light .btn-theme {
-  --el-button-bg-color: rgba(99, 102, 241, 0.08);
-  --el-button-border-color: rgba(99, 102, 241, 0.3);
-  --el-button-text-color: #6366f1;
-  --el-button-hover-bg-color: rgba(99, 102, 241, 0.15);
-  --el-button-hover-border-color: rgba(99, 102, 241, 0.5);
+  --el-button-bg-color: rgba(99, 102, 241, 0.04);
+  --el-button-border-color: rgba(99, 102, 241, 0.12);
+  --el-button-text-color: #6b7280;
+  --el-button-hover-bg-color: rgba(99, 102, 241, 0.08);
+  --el-button-hover-border-color: rgba(99, 102, 241, 0.3);
   --el-button-hover-text-color: #4f46e5;
 }
-/* ===== 左侧快捷目录 ===== */
+/* ===== 左侧固定侧边栏 ===== */
 .quick-nav {
   position: fixed;
-  left: 16px;
-  top: 100px;
-  z-index: 100;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 210;
   display: flex;
   flex-direction: column;
-  padding: 6px 0 10px;
-  background: rgba(15, 15, 20, 0.92);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-radius: 14px;
-  border: 1px solid rgba(139, 92, 246, 0.22);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(139, 92, 246, 0.06);
-  width: 160px;
-  max-height: calc(100vh - 120px);
+  padding: 14px 0 10px;
+  background: linear-gradient(180deg, rgba(12, 12, 16, 0.98) 0%, rgba(9, 9, 11, 0.99) 100%);
+  backdrop-filter: blur(20px) saturate(1.3);
+  -webkit-backdrop-filter: blur(20px) saturate(1.3);
+  border-right: 1px solid rgba(139, 92, 246, 0.1);
+  box-shadow: 1px 0 0 rgba(255,255,255,0.02), 4px 0 24px rgba(0, 0, 0, 0.3);
+  width: 180px;
   overflow-y: auto;
   overflow-x: hidden;
-  transition: width 0.22s ease, padding 0.22s ease, opacity 0.2s ease;
-}
-/* 窗口较窄时：折叠态自动降低透明度，悬浮时恢复，减少遮挡感 */
-@media (max-width: 960px) {
-  .quick-nav.collapsed {
-    opacity: 0.45;
-    left: 4px;
-  }
-  .quick-nav.collapsed:hover {
-    opacity: 1;
-    left: 16px;
-  }
+  transition: width 0.25s cubic-bezier(.4,0,.2,1), padding 0.25s cubic-bezier(.4,0,.2,1);
 }
 html.light .quick-nav {
-  background: rgba(255, 255, 255, 0.94);
-  border-color: rgba(139, 92, 246, 0.2);
-  box-shadow: 0 8px 28px rgba(139, 92, 246, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 247, 255, 0.99) 100%);
+  border-right-color: rgba(139, 92, 246, 0.1);
+  box-shadow: 1px 0 0 rgba(139,92,246,0.06), 4px 0 20px rgba(139, 92, 246, 0.04);
 }
+.quick-nav::-webkit-scrollbar { width: 4px; }
+.quick-nav::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.25); border-radius: 4px; }
+.quick-nav::-webkit-scrollbar-track { background: transparent; }
 .quick-nav.collapsed {
-  width: 36px;
-  padding: 4px 0;
+  width: 48px;
+  padding: 12px 0;
 }
 .quick-nav.collapsed .nav-steps,
 .quick-nav.collapsed .nav-group {
   display: none;
+}
+@media (max-width: 768px) {
+  .quick-nav { width: 48px; padding: 12px 0; }
+  .quick-nav .nav-steps, .quick-nav .nav-group { display: none; }
+  .quick-nav .nav-sidebar-title { display: none; }
+  .quick-nav .nav-sidebar-header { justify-content: center; padding: 0 4px 8px; }
+  .header, .main { margin-left: 48px !important; }
+  .main { padding: 16px 12px 48px; }
+  .asset-list-two { grid-template-columns: 1fr; }
 }
 /* 当前任务面板 */
 .atp-panel {
@@ -5244,39 +5526,64 @@ html.light .atp-item-dot { background: #8b5cf6; }
 html.light .atp-item-label { color: #374151; }
 html.light .atp-item:hover { background: rgba(0,0,0,0.04); }
 html.light .atp-panel { border-top-color: rgba(139,92,246,0.15); }
+.nav-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 8px;
+  border-bottom: 1px solid rgba(139, 92, 246, 0.15);
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+html.light .nav-sidebar-header { border-bottom-color: rgba(139, 92, 246, 0.12); }
+.quick-nav.collapsed .nav-sidebar-header {
+  justify-content: center;
+  padding: 0 4px 8px;
+}
+.nav-sidebar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #a78bfa;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+}
+html.light .nav-sidebar-title { color: #7c3aed; }
 .nav-toggle {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   cursor: pointer;
-  color: #52525b;
+  color: #71717a;
   transition: color 0.15s, background 0.15s;
   border-radius: 6px;
-  margin: 0 6px 4px;
   flex-shrink: 0;
+  font-size: 16px;
 }
-.nav-toggle:hover { color: #e4e4e7; background: rgba(255,255,255,0.07); }
+.nav-toggle:hover { color: #e4e4e7; background: rgba(255,255,255,0.08); }
+html.light .nav-toggle { color: #9ca3af; }
 html.light .nav-toggle:hover { color: #374151; background: rgba(0,0,0,0.05); }
 
 /* ─── Steps ─── */
 .nav-steps {
   display: flex;
   flex-direction: column;
-  padding: 0 10px 0 8px;
+  padding: 0 10px 0 10px;
 }
 .nav-step {
   display: flex;
   align-items: stretch;
   gap: 8px;
   cursor: pointer;
-  border-radius: 8px;
-  padding: 2px 4px 2px 0;
-  transition: background 0.18s;
+  border-radius: 6px;
+  padding: 3px 6px 3px 0;
+  transition: background 0.2s ease;
   user-select: none;
 }
-.nav-step:hover { background: rgba(255,255,255,0.05); }
-html.light .nav-step:hover { background: rgba(0,0,0,0.04); }
+.nav-step:hover { background: rgba(255,255,255,0.04); }
+html.light .nav-step:hover { background: rgba(99,102,241,0.05); }
 
 /* connector column */
 .step-connector-wrap {
@@ -5312,31 +5619,31 @@ html.light .step-line { background: rgba(0,0,0,0.1); }
   border: 2px solid transparent;
 }
 .dot-pending {
-  background: rgba(63,63,70,0.7);
-  border-color: rgba(113,113,122,0.4);
-  color: #71717a;
+  background: rgba(39,39,42,0.6);
+  border-color: rgba(63,63,70,0.4);
+  color: #52525b;
 }
 html.light .dot-pending {
-  background: rgba(229,231,235,0.8);
-  border-color: rgba(156,163,175,0.5);
+  background: rgba(229,231,235,0.6);
+  border-color: rgba(156,163,175,0.3);
   color: #9ca3af;
 }
 .dot-partial {
-  background: rgba(245, 158, 11, 0.18);
-  border-color: rgba(245, 158, 11, 0.6);
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.45);
   color: #f59e0b;
 }
 .dot-generating {
-  background: rgba(139, 92, 246, 0.2);
-  border-color: rgba(139, 92, 246, 0.7);
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.5);
   color: #a78bfa;
-  box-shadow: 0 0 8px rgba(139, 92, 246, 0.4);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.2);
 }
 .dot-done {
-  background: rgba(34, 197, 94, 0.2);
-  border-color: rgba(34, 197, 94, 0.7);
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.5);
   color: #22c55e;
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.25);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.15);
 }
 .dot-icon { font-size: 13px; }
 .dot-num { font-size: 11px; line-height: 1; }
@@ -5352,33 +5659,34 @@ html.light .dot-pending {
 }
 .step-label {
   flex: 1;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
-  color: #a1a1aa;
+  color: #71717a;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 0.2s;
+  transition: color 0.2s ease;
 }
 html.light .step-label { color: #6b7280; }
-.nav-step:hover .step-label { color: #e4e4e7; }
-html.light .nav-step:hover .step-label { color: #111827; }
-.status-done .step-label { color: #86efac; }
-html.light .status-done .step-label { color: #16a34a; }
+.nav-step:hover .step-label { color: #d4d4d8; }
+html.light .nav-step:hover .step-label { color: #1e1b4b; }
+.status-done .step-label { color: #6ee7b7; }
+html.light .status-done .step-label { color: #059669; }
 .status-generating .step-label { color: #c4b5fd; }
 html.light .status-generating .step-label { color: #7c3aed; }
-.status-partial .step-label { color: #fcd34d; }
+.status-partial .step-label { color: #fbbf24; }
 html.light .status-partial .step-label { color: #d97706; }
 
 .step-count {
-  font-size: 11px;
-  color: #71717a;
-  background: rgba(255,255,255,0.07);
+  font-size: 10px;
+  color: #52525b;
+  background: rgba(255,255,255,0.04);
   border-radius: 10px;
-  padding: 0 5px;
+  padding: 1px 5px;
   flex-shrink: 0;
+  font-weight: 500;
 }
-html.light .step-count { background: rgba(0,0,0,0.06); color: #9ca3af; }
+html.light .step-count { background: rgba(0,0,0,0.04); color: #9ca3af; }
 
 .step-badge {
   display: flex;
@@ -5413,62 +5721,72 @@ html.light .nav-sub-toggle { border-top-color: rgba(0,0,0,0.07); color: #9ca3af;
 .nav-sub-toggle:hover { color: #e4e4e7; }
 html.light .nav-sub-toggle:hover { color: #374151; }
 .nav-sub-list {
-  background: rgba(0,0,0,0.18);
-  padding: 3px 0;
+  background: rgba(0,0,0,0.12);
+  padding: 4px 0;
   border-radius: 0 0 6px 6px;
 }
-html.light .nav-sub-list { background: rgba(0,0,0,0.04); }
+html.light .nav-sub-list { background: rgba(99,102,241,0.03); }
 .nav-sub-item {
-  padding: 5px 12px 5px 28px;
-  font-size: 12px;
-  color: #71717a;
+  padding: 4px 10px 4px 26px;
+  font-size: 11.5px;
+  color: #52525b;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: color 0.15s;
+  transition: color 0.15s, background 0.15s;
+  border-radius: 4px;
+  margin: 0 4px;
 }
 html.light .nav-sub-item { color: #9ca3af; }
-.nav-sub-item:hover { color: #fff; background: rgba(255,255,255,0.05); }
-html.light .nav-sub-item:hover { color: #111827; background: rgba(0,0,0,0.04); }
+.nav-sub-item:hover { color: #d4d4d8; background: rgba(255,255,255,0.04); }
+html.light .nav-sub-item:hover { color: #1e1b4b; background: rgba(99,102,241,0.06); }
 
 .main {
-  max-width: min(1400px, 96vw);
-  margin: 0 auto;
-  padding: 24px 16px 48px;
+  margin-left: 180px;
+  margin-right: 0;
+  padding: 24px 32px 48px;
+  transition: margin-left 0.25s cubic-bezier(.4,0,.2,1);
+}
+.sidebar-collapsed .main {
+  margin-left: 48px;
 }
 .section {
   margin-bottom: 24px;
 }
 .card {
-  background: rgba(24, 24, 27, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-radius: 16px;
-  padding: 20px;
-  border: 1px solid rgba(63, 63, 70, 0.7);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
-  transition: border-color 0.3s, box-shadow 0.3s;
+  background: rgba(17, 17, 21, 0.7);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border-radius: 14px;
+  padding: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 4px 24px rgba(0, 0, 0, 0.2);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
 }
 .card:hover {
-  border-color: rgba(139, 92, 246, 0.2);
-  box-shadow: 0 6px 32px rgba(0, 0, 0, 0.25);
+  border-color: rgba(139, 92, 246, 0.18);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 40px rgba(0, 0, 0, 0.3);
 }
 html.light .card {
-  background: rgba(255, 255, 255, 0.88);
-  border-color: rgba(139, 92, 246, 0.12);
-  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.06);
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
+  border-color: rgba(139, 92, 246, 0.08);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.8) inset, 0 4px 20px rgba(99, 102, 241, 0.05);
 }
 html.light .card:hover {
-  border-color: rgba(139, 92, 246, 0.25);
-  box-shadow: 0 6px 28px rgba(139, 92, 246, 0.1);
+  border-color: rgba(139, 92, 246, 0.18);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.8) inset, 0 8px 36px rgba(99, 102, 241, 0.08);
 }
 .section-title {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   margin: 0 0 4px;
-  color: #fafafa;
+  color: #f4f4f5;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
-html.light .section-title { color: #18181b; }
+html.light .section-title { color: #1e1b4b; }
 .pipeline-section {
   padding: 12px 16px !important;
 }
@@ -5855,10 +6173,12 @@ html.light .resource-block-title {
   gap: 16px;
 }
 .section-desc {
-  color: #71717a;
-  font-size: 0.85rem;
-  margin: 0 0 12px;
+  color: #52525b;
+  font-size: 0.82rem;
+  margin: 0 0 14px;
+  line-height: 1.5;
 }
+html.light .section-desc { color: #6b7280; }
 .story-textarea {
   margin-bottom: 12px;
 }
@@ -5871,7 +6191,7 @@ html.light .resource-block-title {
   gap: 16px;
 }
 .asset-list-two {
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
   gap: 20px;
 }
 .asset-item {
@@ -6130,7 +6450,7 @@ html.light .empty-tip {
 }
 /* ── 段落分隔标头 ─────────────────────────────── */
 .segment-header {
-  margin: 28px 0 12px;
+  margin: 24px 0 14px;
   position: relative;
 }
 .segment-header:first-child { margin-top: 0; }
@@ -6138,38 +6458,40 @@ html.light .empty-tip {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 16px;
-  background: linear-gradient(90deg, rgba(139,92,246,0.18) 0%, rgba(139,92,246,0.04) 100%);
-  border-left: 4px solid #8b5cf6;
-  border-radius: 0 8px 8px 0;
+  padding: 10px 18px;
+  background: linear-gradient(90deg, rgba(139,92,246,0.12) 0%, transparent 80%);
+  border-left: 3px solid rgba(139,92,246,0.6);
+  border-radius: 0 10px 10px 0;
 }
 .segment-index-badge {
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   color: #a78bfa;
-  background: rgba(139,92,246,0.25);
+  background: rgba(139,92,246,0.15);
   padding: 2px 8px;
   border-radius: 20px;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   white-space: nowrap;
 }
 .segment-title-text {
-  font-size: 15px;
-  font-weight: 700;
-  color: #e2e8f0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d4d4d8;
   flex: 1;
+  letter-spacing: -0.01em;
 }
 .segment-shot-range {
   font-size: 11px;
-  color: #71717a;
+  color: #52525b;
   white-space: nowrap;
 }
 html.light .segment-header-inner {
-  background: linear-gradient(90deg, rgba(139,92,246,0.1) 0%, rgba(139,92,246,0.02) 100%);
-  border-left-color: #7c3aed;
+  background: linear-gradient(90deg, rgba(139,92,246,0.07) 0%, transparent 80%);
+  border-left-color: rgba(124,58,237,0.5);
 }
 html.light .segment-title-text { color: #1e1b4b; }
-html.light .segment-index-badge { color: #7c3aed; background: rgba(124,58,237,0.12); }
+html.light .segment-index-badge { color: #7c3aed; background: rgba(124,58,237,0.08); }
+html.light .segment-shot-range { color: #9ca3af; }
 
 /* 左侧导航段落标签 */
 .nav-segment-label {
@@ -6195,29 +6517,32 @@ html.light .segment-index-badge { color: #7c3aed; background: rgba(124,58,237,0.
   display: flex;
   align-items: flex-start;
   gap: 0;
-  margin-bottom: 20px;
-  background: rgba(28, 28, 30, 0.8);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  margin-bottom: 16px;
+  background: rgba(17, 17, 21, 0.65);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
   border-radius: 12px;
-  border: 1px solid rgba(63, 63, 70, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   overflow: hidden;
   position: relative;
-  transition: border-color 0.25s, box-shadow 0.25s;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
   animation: sb-fade-in 0.35s ease both;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 2px 12px rgba(0, 0, 0, 0.15);
 }
 .storyboard-row:hover {
-  border-color: rgba(139, 92, 246, 0.3);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  border-color: rgba(139, 92, 246, 0.2);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 6px 28px rgba(0, 0, 0, 0.25);
+  transform: translateY(-1px);
 }
 html.light .storyboard-row {
-  background: rgba(255, 255, 255, 0.85);
-  border-color: rgba(139, 92, 246, 0.12);
-  box-shadow: 0 2px 12px rgba(139, 92, 246, 0.06);
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(139, 92, 246, 0.06);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.7) inset, 0 2px 12px rgba(99, 102, 241, 0.04);
 }
 html.light .storyboard-row:hover {
-  border-color: rgba(139, 92, 246, 0.3);
-  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.1);
+  border-color: rgba(139, 92, 246, 0.18);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.7) inset, 0 6px 24px rgba(99, 102, 241, 0.08);
+  transform: translateY(-1px);
 }
 .storyboard-row:last-child { margin-bottom: 0; }
 /* ── 分镜控制栏（卡片外，缩进） ── */
@@ -6292,13 +6617,13 @@ html.light .sb-ctrl-config-btn.el-button:hover {
 .sb-panel {
   flex: 1;
   min-width: 0;
-  padding: 12px 14px;
-  border-right: 1px solid rgba(63,63,70,0.9);
+  padding: 14px 16px;
+  border-right: 1px solid rgba(255,255,255,0.05);
   display: flex;
   flex-direction: column;
 }
 html.light .sb-panel {
-  border-right-color: rgba(139,92,246,0.1);
+  border-right-color: rgba(139,92,246,0.08);
 }
 .sb-panel:last-child { border-right: none; }
 .sb-panel-title {
@@ -6753,6 +7078,24 @@ html.light .sb-video-placeholder {
   gap: 12px 24px;
   margin-bottom: 16px;
 }
+.video-option-hint {
+  flex: 1;
+  min-width: 200px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--el-text-color-secondary);
+}
+.video-option-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 12px;
+}
+.video-watermark-input {
+  flex: 1;
+  min-width: 200px;
+  max-width: 360px;
+}
 .config-tip {
   margin: 12px 0 0;
   font-size: 0.9rem;
@@ -6841,6 +7184,56 @@ html.light .sb-video-placeholder {
   color: #3f3f46;
   font-size: 0.85rem;
   margin: 0 4px;
+}
+/* 解说导出行：避免浅色主题下勾选文案与卡片背景对比度不足 */
+.sb-narration-export-row :deep(.el-checkbox__label) {
+  color: #e4e4e7;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+html.light .sb-narration-export-row :deep(.el-checkbox__label) {
+  color: #374151;
+}
+.sb-export-srt-btn.el-button--primary.is-plain {
+  --el-button-bg-color: rgba(124, 58, 237, 0.75);
+  --el-button-border-color: #a78bfa;
+  --el-button-text-color: #fff;
+  --el-button-hover-text-color: #fff;
+  --el-button-hover-bg-color: #8b5cf6;
+  --el-button-hover-border-color: #c4b5fd;
+}
+html.light .sb-export-srt-btn.el-button--primary.is-plain {
+  --el-button-bg-color: #7c3aed;
+  --el-button-border-color: #6d28d9;
+  --el-button-text-color: #fff;
+  --el-button-hover-text-color: #fff;
+  --el-button-hover-bg-color: #6d28d9;
+  --el-button-hover-border-color: #5b21b6;
+}
+.sb-narration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+/* 分镜内解说旁白输入框：强制字/底对比，避免主题变量与页面继承冲突导致「看不见字」 */
+.sb-narration-input :deep(.el-textarea__inner) {
+  color: #e4e4e7 !important;
+  background-color: rgba(24, 24, 27, 0.85) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  box-shadow: none;
+}
+.sb-narration-input :deep(.el-textarea__inner::placeholder) {
+  color: #71717a !important;
+}
+html.light .sb-narration-input :deep(.el-textarea__inner) {
+  color: #1e1b4b !important;
+  background-color: #ffffff !important;
+  border-color: rgba(139, 92, 246, 0.22) !important;
+}
+html.light .sb-narration-input :deep(.el-textarea__inner::placeholder) {
+  color: #9ca3af !important;
 }
 .sub-title {
   font-size: 1rem;

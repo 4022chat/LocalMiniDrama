@@ -2,6 +2,21 @@
 const imageClient = require('./imageClient');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
+const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
+
+function applySceneStyleOverride(cfg, styleOverride) {
+  const o = (styleOverride || '').toString().trim();
+  if (!o) return cfg;
+  return {
+    ...cfg,
+    style: {
+      ...(cfg?.style || {}),
+      default_style_zh: o,
+      default_style_en: o,
+      default_style: o,
+    },
+  };
+}
 function updateScene(db, log, sceneId, req) {
   const row = db.prepare('SELECT id FROM scenes WHERE id = ? AND deleted_at IS NULL').get(Number(sceneId));
   if (!row) return { ok: false, error: 'scene not found' };
@@ -129,11 +144,14 @@ async function generateScenePromptOnly(db, log, cfg, sceneId, modelName, style) 
   ).get(Number(sceneId));
   if (!sceneRow) return { ok: false, error: 'scene not found' };
 
+  const dramaFull = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(sceneRow.drama_id);
+  let mergedCfg = mergeCfgStyleWithDrama(cfg, dramaFull || {});
+  mergedCfg = applySceneStyleOverride(mergedCfg, style);
+
   const location = (sceneRow.location || '').trim();
   const time = (sceneRow.time || '').trim();
   const rawPrompt = (sceneRow.prompt || '').trim();
-  const styleText = (style && String(style).trim()) || cfg?.style?.default_style || '';
-  const fourViewCfg = { ...cfg, style: { ...(cfg?.style || {}), default_style: styleText } };
+  const fourViewCfg = mergedCfg;
 
   // 构建文字AI输入（location + time + 原始描述）
   const sceneDesc = [
@@ -162,8 +180,9 @@ async function generateScenePromptOnly(db, log, cfg, sceneId, modelName, style) 
     return { ok: false, error: 'AI返回内容为空' };
   }
 
+  const styleEn = (mergedCfg.style.default_style_en || mergedCfg.style.default_style || '').trim();
   // Step 2: 拼接完整图片提示词（与 generateSceneFourViewImage 保持一致）
-  const polishedPrompt = buildSceneFourViewImagePrompt(fourViewDescription.trim(), styleText);
+  const polishedPrompt = buildSceneFourViewImagePrompt(fourViewDescription.trim(), styleEn);
 
   db.prepare('UPDATE scenes SET polished_prompt = ?, updated_at = ? WHERE id = ?').run(
     polishedPrompt, new Date().toISOString(), Number(sceneId)
@@ -183,10 +202,11 @@ async function generateSceneFourViewImage(db, log, cfg, sceneId, modelName, styl
     'SELECT id, drama_id, location, time, prompt, polished_prompt FROM scenes WHERE id = ? AND deleted_at IS NULL'
   ).get(Number(sceneId));
   if (!sceneRow) return { ok: false, error: 'scene not found' };
-  const drama = db.prepare('SELECT id FROM dramas WHERE id = ? AND deleted_at IS NULL').get(sceneRow.drama_id);
-  if (!drama) return { ok: false, error: 'unauthorized' };
+  const dramaFull = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(sceneRow.drama_id);
+  if (!dramaFull) return { ok: false, error: 'unauthorized' };
 
-  const styleText = (style && String(style).trim()) || cfg?.style?.default_style || '';
+  let mergedCfg = mergeCfgStyleWithDrama(cfg, dramaFull);
+  mergedCfg = applySceneStyleOverride(mergedCfg, style);
   let imagePrompt;
 
   if (sceneRow.polished_prompt && String(sceneRow.polished_prompt).trim()) {
@@ -196,8 +216,6 @@ async function generateSceneFourViewImage(db, log, cfg, sceneId, modelName, styl
     const location = (sceneRow.location || '').toString().trim();
     const time = (sceneRow.time || '').toString().trim();
     const rawPrompt = (sceneRow.prompt || '').toString().trim();
-    const fourViewCfg = { ...cfg, style: { ...(cfg?.style || {}), default_style: styleText } };
-
     const sceneDesc = [
       location ? `场景地点：${location}` : '',
       time ? `时间/时段：${time}` : '',
@@ -205,7 +223,7 @@ async function generateSceneFourViewImage(db, log, cfg, sceneId, modelName, styl
     ].filter(Boolean).join('\n');
     const inputText = sceneDesc || (location || '未知场景');
 
-    const systemPrompt = promptI18n.getScenePolishPrompt(fourViewCfg);
+    const systemPrompt = promptI18n.getScenePolishPrompt(mergedCfg);
     const userMsg = `请根据以下场景信息，生成四格场景参考图的提示词：\n\n${inputText}`;
 
     log.info('[场景四视图] Step1 开始生成提示词', { scene_id: sceneId, location, time });
@@ -221,7 +239,8 @@ async function generateSceneFourViewImage(db, log, cfg, sceneId, modelName, styl
       fourViewDescription = inputText;
     }
 
-    imagePrompt = buildSceneFourViewImagePrompt(fourViewDescription, styleText);
+    const styleEn = (mergedCfg.style.default_style_en || mergedCfg.style.default_style || '').trim();
+    imagePrompt = buildSceneFourViewImagePrompt(fourViewDescription, styleEn);
 
     // 顺带保存，供下次复用
     try {

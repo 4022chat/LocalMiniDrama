@@ -54,15 +54,25 @@ function ensureDir(dir) {
   }
 }
 
-function uploadFile(storagePath, baseUrl, log, fileBuffer, originalName, mimeType, category) {
-  const categoryPath = path.join(storagePath, category);
+/** @returns {{ dir: string, relPrefix: string }} */
+function resolveCategoryPaths(storagePath, category, projectSubdir) {
+  const sub = projectSubdir && String(projectSubdir).trim();
+  if (sub) {
+    const relPrefix = `${sub.replace(/\\/g, '/')}/${category}`;
+    return { dir: path.join(storagePath, sub, category), relPrefix };
+  }
+  return { dir: path.join(storagePath, category), relPrefix: category };
+}
+
+function uploadFile(storagePath, baseUrl, log, fileBuffer, originalName, mimeType, category, projectSubdir = null) {
+  const { dir: categoryPath, relPrefix } = resolveCategoryPaths(storagePath, category, projectSubdir);
   ensureDir(categoryPath);
   const ext = path.extname(originalName) || '.png';
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15);
   const name = `${timestamp}_${randomUUID()}${ext}`;
   const filePath = path.join(categoryPath, name);
   fs.writeFileSync(filePath, fileBuffer);
-  const relativePath = `${category}/${name}`;
+  const relativePath = `${relPrefix}/${name}`.replace(/\\/g, '/');
   const url = baseUrl ? `${baseUrl.replace(/\/$/, '')}/${relativePath}` : `/static/${relativePath}`;
   log.info('File uploaded', { path: filePath, url });
   return { url, local_path: relativePath };
@@ -75,11 +85,12 @@ function uploadFile(storagePath, baseUrl, log, fileBuffer, originalName, mimeTyp
  * @param {string} category - 子目录：characters / scenes / images
  * @param {object} log - logger
  * @param {string} [prefix] - 文件名前缀，如 ig_123
+ * @param {string|null} [projectSubdir] - 如 projects/0001_20250324_剧名 或 library，与 uploadFile 一致
  * @returns {Promise<string|null>} 相对路径如 characters/xxx.png，失败返回 null
  */
-async function downloadImageToLocal(storagePath, imageUrl, category, log, prefix = '') {
+async function downloadImageToLocal(storagePath, imageUrl, category, log, prefix = '', projectSubdir = null) {
   if (!imageUrl || typeof imageUrl !== 'string') return null;
-  const categoryPath = path.join(storagePath, category);
+  const { dir: categoryPath, relPrefix } = resolveCategoryPaths(storagePath, category, projectSubdir);
   try {
     ensureDir(categoryPath);
     let buffer;
@@ -118,8 +129,8 @@ async function downloadImageToLocal(storagePath, imageUrl, category, log, prefix
     const name = `${prefix}${prefix ? '_' : ''}${randomUUID().slice(0, 8)}.${ext}`;
     const filePath = path.join(categoryPath, name);
     fs.writeFileSync(filePath, buffer);
-    const relativePath = `${category}/${name}`;
-    log.info('Image saved to local', { category, local_path: relativePath });
+    const relativePath = `${relPrefix}/${name}`.replace(/\\/g, '/');
+    log.info('Image saved to local', { category, local_path: relativePath, projectSubdir: projectSubdir || '(root)' });
     return relativePath;
   } catch (e) {
     log.warn('downloadImageToLocal error', { category, error: e.message });

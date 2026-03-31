@@ -3,6 +3,21 @@ const imageClient = require('./imageClient');
 const { aspectRatioToSize } = require('./imageService');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
+const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
+
+function applyStyleOverrideToCfg(cfg, styleOverride) {
+  const o = (styleOverride || '').toString().trim();
+  if (!o) return cfg;
+  return {
+    ...cfg,
+    style: {
+      ...(cfg?.style || {}),
+      default_style_zh: o,
+      default_style_en: o,
+      default_style: o,
+    },
+  };
+}
 
 function appendPrompt(base, extra) {
   const add = (extra || '').toString().trim();
@@ -20,17 +35,18 @@ function generateCharacterImage(db, log, cfg, characterId, modelName, style) {
     'SELECT id, drama_id, name, appearance, description FROM characters WHERE id = ? AND deleted_at IS NULL'
   ).get(Number(characterId));
   if (!charRow) return { ok: false, error: 'character not found' };
-  const drama = db.prepare('SELECT id, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(charRow.drama_id);
+  const drama = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(charRow.drama_id);
   if (!drama) return { ok: false, error: 'unauthorized' };
 
-  // 用项目的 aspect_ratio 覆盖全局 cfg 中的 default_image_ratio
-  let effectiveCfg = cfg;
+  let effectiveCfg = { ...cfg, style: { ...(cfg?.style || {}) } };
   try {
     const meta = drama.metadata ? (typeof drama.metadata === 'string' ? JSON.parse(drama.metadata) : drama.metadata) : null;
     if (meta && meta.aspect_ratio) {
-      effectiveCfg = { ...cfg, style: { ...(cfg?.style || {}), default_image_ratio: meta.aspect_ratio } };
+      effectiveCfg.style.default_image_ratio = meta.aspect_ratio;
     }
   } catch (_) {}
+  effectiveCfg = mergeCfgStyleWithDrama(effectiveCfg, drama);
+  effectiveCfg = applyStyleOverrideToCfg(effectiveCfg, style);
 
   let prompt = '';
   if (charRow.appearance && String(charRow.appearance).trim()) {
@@ -40,10 +56,9 @@ function generateCharacterImage(db, log, cfg, characterId, modelName, style) {
   } else {
     prompt = charRow.name || '';
   }
-  const styleOverride = (style && String(style).trim()) || '';
-  const styleText = styleOverride || (effectiveCfg?.style?.default_style || '');
-  prompt = appendPrompt(prompt, styleText);
-  if (!styleOverride) {
+  const styleForImage = (effectiveCfg?.style?.default_style_en || effectiveCfg?.style?.default_style || '').trim();
+  prompt = appendPrompt(prompt, styleForImage);
+  if (!(style && String(style).trim())) {
     prompt = appendPrompt(prompt, effectiveCfg?.style?.default_role_style || '');
   }
   const ratioText = effectiveCfg?.style?.default_role_ratio
@@ -379,6 +394,10 @@ async function generateCharacterPromptOnly(db, log, cfg, characterId, modelName,
   ).get(Number(characterId));
   if (!charRow) return { ok: false, error: 'character not found' };
 
+  const dramaFull = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(charRow.drama_id);
+  let mergedCfg = mergeCfgStyleWithDrama(cfg, dramaFull || {});
+  mergedCfg = applyStyleOverrideToCfg(mergedCfg, style);
+
   let appearanceText = '';
   if (charRow.appearance && String(charRow.appearance).trim()) {
     appearanceText = String(charRow.appearance).trim();
@@ -388,9 +407,7 @@ async function generateCharacterPromptOnly(db, log, cfg, characterId, modelName,
     appearanceText = charRow.name || '';
   }
 
-  const styleText = (style && String(style).trim()) || cfg?.style?.default_style || '';
-  const fourViewCfg = { ...cfg, style: { ...(cfg?.style || {}), default_style: styleText } };
-  const systemPrompt = promptI18n.getRolePolishPrompt(fourViewCfg);
+  const systemPrompt = promptI18n.getRolePolishPrompt(mergedCfg);
   const userPrompt = `角色名称：${charRow.name}\n\n角色描述：\n${appearanceText}`;
 
   log.info('[四视图提示词] 开始生成', { character_id: characterId, name: charRow.name });
@@ -406,7 +423,8 @@ async function generateCharacterPromptOnly(db, log, cfg, characterId, modelName,
     fourViewDescription = appearanceText;
   }
 
-  const polishedPrompt = buildFourViewImagePrompt(fourViewDescription, styleText);
+  const styleEn = (mergedCfg.style.default_style_en || mergedCfg.style.default_style || '').trim();
+  const polishedPrompt = buildFourViewImagePrompt(fourViewDescription, styleEn);
 
   // 保存到 characters.polished_prompt
   db.prepare('UPDATE characters SET polished_prompt = ?, updated_at = ? WHERE id = ?').run(
@@ -422,10 +440,11 @@ async function generateCharacterFourViewImage(db, log, cfg, characterId, modelNa
     'SELECT id, drama_id, name, appearance, description, polished_prompt FROM characters WHERE id = ? AND deleted_at IS NULL'
   ).get(Number(characterId));
   if (!charRow) return { ok: false, error: 'character not found' };
-  const drama = db.prepare('SELECT id FROM dramas WHERE id = ? AND deleted_at IS NULL').get(charRow.drama_id);
-  if (!drama) return { ok: false, error: 'unauthorized' };
+  const dramaFull = db.prepare('SELECT id, style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(charRow.drama_id);
+  if (!dramaFull) return { ok: false, error: 'unauthorized' };
 
-  const styleText = (style && String(style).trim()) || cfg?.style?.default_style || '';
+  let mergedCfg = mergeCfgStyleWithDrama(cfg, dramaFull);
+  mergedCfg = applyStyleOverrideToCfg(mergedCfg, style);
   let imagePrompt;
 
   if (charRow.polished_prompt && String(charRow.polished_prompt).trim()) {
@@ -443,8 +462,7 @@ async function generateCharacterFourViewImage(db, log, cfg, characterId, modelNa
       appearanceText = charRow.name || '';
     }
 
-    const fourViewCfg = { ...cfg, style: { ...(cfg?.style || {}), default_style: styleText } };
-    const systemPrompt = promptI18n.getRolePolishPrompt(fourViewCfg);
+    const systemPrompt = promptI18n.getRolePolishPrompt(mergedCfg);
     const userPrompt = `角色名称：${charRow.name}\n\n角色描述：\n${appearanceText}`;
 
     log.info('[四视图] Step1 开始生成四视图提示词', { character_id: characterId, name: charRow.name });
@@ -460,7 +478,8 @@ async function generateCharacterFourViewImage(db, log, cfg, characterId, modelNa
       fourViewDescription = appearanceText;
     }
 
-    imagePrompt = buildFourViewImagePrompt(fourViewDescription, styleText);
+    const styleEn = (mergedCfg.style.default_style_en || mergedCfg.style.default_style || '').trim();
+    imagePrompt = buildFourViewImagePrompt(fourViewDescription, styleEn);
 
     // 顺带保存，供下次复用
     try {

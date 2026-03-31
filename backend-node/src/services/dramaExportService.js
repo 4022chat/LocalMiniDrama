@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 
-const EXPORT_VERSION = '1.1';
+const EXPORT_VERSION = '1.3';
 
 function getStoragePath(cfg) {
   const raw = cfg?.storage?.local_path || './data/storage';
@@ -176,6 +176,12 @@ function exportDrama(db, cfg, log, dramaId) {
           const sbImageFile = ig ? `media/storyboards/sb_${sb.id}${extOf(ig.local_path)}` : null;
           const vg = videosBySb[sb.id];
           const sbVideoFile = vg && vg.local_path ? `media/videos/sb_${sb.id}${extOf(vg.local_path)}` : null;
+          const sbAudioFile = sb.audio_local_path
+            ? `media/audio/sb_${sb.id}${extOf(sb.audio_local_path)}`
+            : null;
+          const sbNarrationAudioFile = sb.narration_audio_local_path
+            ? `media/audio/sb_${sb.id}_narration${extOf(sb.narration_audio_local_path)}`
+            : null;
 
           // characters: 存储角色在导出列表中的下标（而非原 ID），方便跨项目恢复
           const charIds = parseSbChars(sb.characters);
@@ -199,6 +205,7 @@ function exportDrama(db, cfg, log, dramaId) {
             location: sb.location,
             time: sb.time,
             dialogue: sb.dialogue,
+            narration: sb.narration || null,
             action: sb.action,
             atmosphere: sb.atmosphere,
             result: sb.result,
@@ -224,6 +231,8 @@ function exportDrama(db, cfg, log, dramaId) {
             prop_indices: propIndices,
             image_file: sbImageFile,
             video_file: sbVideoFile,
+            audio_file: sbAudioFile,
+            narration_audio_file: sbNarrationAudioFile,
           };
         }),
       };
@@ -305,6 +314,22 @@ function exportDrama(db, cfg, log, dramaId) {
       const abs = localPathToAbs(storagePath, vg.local_path);
       const buf = safeReadFile(abs);
       if (buf) zip.addFile(`media/videos/sb_${sbId}${extOf(vg.local_path)}`, buf);
+    }
+  }
+
+  // 分镜对白 TTS / 解说旁白 TTS（分字段存储）
+  for (const ep of episodes) {
+    for (const sb of storyboardsByEp[ep.id] || []) {
+      if (sb.audio_local_path) {
+        const abs = localPathToAbs(storagePath, sb.audio_local_path);
+        const buf = safeReadFile(abs);
+        if (buf) zip.addFile(`media/audio/sb_${sb.id}${extOf(sb.audio_local_path)}`, buf);
+      }
+      if (sb.narration_audio_local_path) {
+        const abs = localPathToAbs(storagePath, sb.narration_audio_local_path);
+        const buf = safeReadFile(abs);
+        if (buf) zip.addFile(`media/audio/sb_${sb.id}_narration${extOf(sb.narration_audio_local_path)}`, buf);
+      }
     }
   }
 

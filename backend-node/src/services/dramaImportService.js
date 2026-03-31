@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
 const { randomUUID } = require('crypto');
+const storageLayout = require('./storageLayout');
 
 function getStoragePath(cfg) {
   const raw = cfg?.storage?.local_path || './data/storage';
@@ -65,28 +66,29 @@ function resolveTitle(db, baseTitle) {
 
 /**
  * 保存媒体文件到 storage，返回相对路径
+ * @param {string} projectDir 如 projects/0001_20250324_剧名，与工程内其它媒体一致
  */
-function saveMediaFile(storagePath, category, files, zipPath, prefix) {
+function saveMediaFile(storagePath, projectDir, category, files, zipPath, prefix) {
   if (!zipPath) return null;
   const buf = files.get(zipPath);
   if (!buf) return null;
   const ext = path.extname(zipPath) || '.jpg';
-  const categoryPath = path.join(storagePath, category);
+  const categoryPath = path.join(storagePath, projectDir, category);
   ensureDir(categoryPath);
   const name = `${prefix}_${randomUUID().slice(0, 8)}${ext}`;
   const abs = path.join(categoryPath, name);
   fs.writeFileSync(abs, buf);
-  return `${category}/${name}`;
+  return `${projectDir}/${category}/${name}`.replace(/\\/g, '/');
 }
 
 /**
  * 批量保存 extra_image_files 数组，返回本地路径 JSON 字符串
  */
-function saveExtraImages(storagePath, category, files, zipPaths, prefix) {
+function saveExtraImages(storagePath, projectDir, category, files, zipPaths, prefix) {
   if (!Array.isArray(zipPaths) || zipPaths.length === 0) return null;
   const localPaths = [];
   for (const zipPath of zipPaths) {
-    const localPath = saveMediaFile(storagePath, category, files, zipPath, prefix);
+    const localPath = saveMediaFile(storagePath, projectDir, category, files, zipPath, prefix);
     if (localPath) localPaths.push(localPath);
   }
   return localPaths.length > 0 ? JSON.stringify(localPaths) : null;
@@ -106,7 +108,15 @@ function importDrama(db, cfg, log, zipBuffer) {
   const now = new Date().toISOString();
 
   let metadata = d.metadata || {};
-  const metaStr = typeof metadata === 'string' ? metadata : JSON.stringify(metadata);
+  if (typeof metadata === 'string') {
+    try {
+      metadata = JSON.parse(metadata);
+    } catch (_) {
+      metadata = {};
+    }
+  }
+  metadata.storage_folder_label = storageLayout.sanitizeFolderLabel(title);
+  const metaStr = JSON.stringify(metadata);
 
   // 用事务包裹全部写入：任何步骤失败时整体回滚，避免部分导入
   let result;
@@ -135,14 +145,20 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     now
   );
   const dramaId = dramaInfo.lastInsertRowid;
+  const projectDir = storageLayout.buildProjectRelativeDir({
+    id: dramaId,
+    title,
+    created_at: now,
+    metadata: metaStr,
+  });
 
   // ---- 导入角色 ----
   const charNewIds = []; // 按导出顺序保存新角色 id，用于恢复分镜 character_indices
   for (let i = 0; i < (data.characters || []).length; i++) {
     const c = data.characters[i];
     if (!c.name) { charNewIds.push(null); continue; }
-    const localPath = saveMediaFile(storagePath, 'characters', files, c.image_file, 'char_imp');
-    const extraImagesJson = saveExtraImages(storagePath, 'characters', files, c.extra_image_files, 'char_extra_imp');
+    const localPath = saveMediaFile(storagePath, projectDir, 'characters', files, c.image_file, 'char_imp');
+    const extraImagesJson = saveExtraImages(storagePath, projectDir, 'characters', files, c.extra_image_files, 'char_extra_imp');
     const info = db.prepare(
       `INSERT INTO characters (drama_id, name, role, description, personality, appearance, voice_style, polished_prompt, local_path, extra_images, sort_order, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -186,8 +202,8 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     const epId = (epIdx != null && epIdx >= 0 && episodeIdList[epIdx])
       ? episodeIdList[epIdx]
       : (episodeIdList[0] || null);
-    const localPath = saveMediaFile(storagePath, 'scenes', files, s.image_file, 'scene_imp');
-    const extraImagesJson = saveExtraImages(storagePath, 'scenes', files, s.extra_image_files, 'scene_extra_imp');
+    const localPath = saveMediaFile(storagePath, projectDir, 'scenes', files, s.image_file, 'scene_imp');
+    const extraImagesJson = saveExtraImages(storagePath, projectDir, 'scenes', files, s.extra_image_files, 'scene_extra_imp');
     const info = db.prepare(
       `INSERT INTO scenes (drama_id, episode_id, location, time, prompt, polished_prompt, local_path, extra_images, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -204,8 +220,8 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     const epId = (epIdx != null && epIdx >= 0 && episodeIdList[epIdx])
       ? episodeIdList[epIdx]
       : (episodeIdList[0] || null);
-    const localPath = saveMediaFile(storagePath, 'images', files, p.image_file, 'prop_imp');
-    const extraImagesJson = saveExtraImages(storagePath, 'images', files, p.extra_image_files, 'prop_extra_imp');
+    const localPath = saveMediaFile(storagePath, projectDir, 'props', files, p.image_file, 'prop_imp');
+    const extraImagesJson = saveExtraImages(storagePath, projectDir, 'props', files, p.extra_image_files, 'prop_extra_imp');
     const pInfo = db.prepare(
       `INSERT INTO props (drama_id, episode_id, name, type, description, prompt, local_path, extra_images, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
@@ -220,7 +236,9 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
     if (!episodeId) continue;
 
     for (const sb of (ep.storyboards || [])) {
-      const sbImagePath = saveMediaFile(storagePath, 'images', files, sb.image_file, 'sb_imp');
+      const sbImagePath = saveMediaFile(storagePath, projectDir, 'images', files, sb.image_file, 'sb_imp');
+      const sbAudioPath = saveMediaFile(storagePath, projectDir, 'audio', files, sb.audio_file, 'sb_audio_imp');
+      const sbNarrationAudioPath = saveMediaFile(storagePath, projectDir, 'audio', files, sb.narration_audio_file, 'sb_narr_audio_imp');
 
       // 还原 characters：从导出时记录的下标映射回新 ID
       const charIndices = Array.isArray(sb.character_indices) ? sb.character_indices : [];
@@ -241,8 +259,8 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
         .filter(id => id != null);
 
       const sbInfo = db.prepare(
-        `INSERT INTO storyboards (episode_id, scene_id, storyboard_number, title, description, location, time, dialogue, action, atmosphere, result, shot_type, angle, angle_h, angle_v, angle_s, movement, lighting_style, depth_of_field, image_prompt, polished_prompt, video_prompt, duration, emotion, emotion_intensity, segment_index, segment_title, continuity_snapshot, characters, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO storyboards (episode_id, scene_id, storyboard_number, title, description, location, time, dialogue, narration, action, atmosphere, result, shot_type, angle, angle_h, angle_v, angle_s, movement, lighting_style, depth_of_field, image_prompt, polished_prompt, video_prompt, duration, emotion, emotion_intensity, segment_index, segment_title, continuity_snapshot, characters, audio_local_path, narration_audio_local_path, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         episodeId,
         sbSceneId,
@@ -252,6 +270,7 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
         sb.location || null,
         sb.time || null,
         sb.dialogue || null,
+        sb.narration || null,
         sb.action || null,
         sb.atmosphere || null,
         sb.result || null,
@@ -273,6 +292,8 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
         sb.segment_title || null,
         sb.continuity_snapshot || null,
         charactersJson,
+        sbAudioPath || null,
+        sbNarrationAudioPath || null,
         now,
         now
       );
@@ -294,7 +315,7 @@ function _doImport(db, storagePath, files, data, d, title, metaStr, now, log) {
 
       // 导入视频
       if (sb.video_file) {
-        const videoLocalPath = saveMediaFile(storagePath, 'videos', files, sb.video_file, 'vid_imp');
+        const videoLocalPath = saveMediaFile(storagePath, projectDir, 'videos', files, sb.video_file, 'vid_imp');
         if (videoLocalPath) {
           db.prepare(
             `INSERT INTO video_generations (drama_id, storyboard_id, provider, prompt, status, local_path, created_at, updated_at)

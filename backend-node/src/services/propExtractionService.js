@@ -29,21 +29,16 @@ async function processPropExtraction(db, log, taskId, episodeId) {
   try {
     const dramaRow = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(episode.drama_id);
     if (dramaRow) {
-      const styleOverrides = {};
-      if (dramaRow.style && String(dramaRow.style).trim()) {
-        styleOverrides.default_style = String(dramaRow.style).trim();
-        styleOverrides.default_prop_style = '';
-      }
+      const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
+      let next = { ...cfg, style: { ...(cfg?.style || {}), default_prop_style: '' } };
       if (dramaRow.metadata) {
         const meta = typeof dramaRow.metadata === 'string' ? JSON.parse(dramaRow.metadata) : dramaRow.metadata;
         if (meta && meta.aspect_ratio) {
-          styleOverrides.default_prop_ratio = meta.aspect_ratio;
-          styleOverrides.default_image_ratio = meta.aspect_ratio;
+          next.style.default_prop_ratio = meta.aspect_ratio;
+          next.style.default_image_ratio = meta.aspect_ratio;
         }
       }
-      if (Object.keys(styleOverrides).length > 0) {
-        cfg = { ...cfg, style: { ...(cfg?.style || {}), ...styleOverrides } };
-      }
+      cfg = mergeCfgStyleWithDrama(next, dramaRow);
     }
   } catch (_) {}
   const systemPrompt = promptI18n.getPropExtractionPrompt(cfg);

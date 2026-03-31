@@ -24,8 +24,26 @@ function isEnglish(cfg) {
   return getLanguage(cfg) === 'en';
 }
 
+/** 画风由前端写入 dramas.metadata.style_prompt_zh / style_prompt_en，mergeCfgStyleWithDrama 注入 cfg.style */
+
+function styleTextForCfgLang(cfg) {
+  const z = (cfg?.style?.default_style_zh || '').trim();
+  const e = (cfg?.style?.default_style_en || '').trim();
+  const d = (cfg?.style?.default_style || '').trim();
+  if (isEnglish(cfg)) return e || d;
+  return z || d;
+}
+
+function styleTextZhForPolish(cfg) {
+  return (cfg?.style?.default_style_zh || cfg?.style?.default_style || '').trim();
+}
+
+function styleTextEnForImage(cfg) {
+  return (cfg?.style?.default_style_en || cfg?.style?.default_style || '').trim();
+}
+
 function getCharacterExtractionPrompt(cfg) {
-  const style = cfg?.style?.default_style || '';
+  const style = styleTextForCfgLang(cfg);
   const imageRatio = cfg?.style?.default_image_ratio || '16:9';
   if (isEnglish(cfg)) {
     return `You are a professional character analyst, skilled at extracting and analyzing character information from scripts.
@@ -224,8 +242,30 @@ function getStoryboardSystemPrompt(cfg) {
 - segment_index 必须从0开始递增的整数，同一段落内所有镜头共享相同的 segment_index 和 segment_title`;
 }
 
+/** 分镜生成勾选「解说旁白」时追加到用户提示词末尾 */
+function getStoryboardNarrationExtraInstructions(cfg) {
+  if (isEnglish(cfg)) {
+    return `
+
+【VO / Narration mode — STRICT (user enabled full VO pipeline)】
+- Add string field "narration" to **each** shot. **Every "narration" MUST be a non-empty string** (at least one full sentence), readable within this shot's "duration".
+- **Shot with shot_number = 1 MUST** open with narrator lines: set time/place/mood or a hook — never leave empty because the shot is "establishing only".
+- **Shot 2** should also carry narration if it is still wide/establishing; do not leave both 1 and 2 empty.
+- Third-person / documentary narrator voice — **not** character dialogue (keep spoken lines in "dialogue" only). Do not copy dialogue text into "narration".
+- 1–3 short sentences per shot; forbid consecutive shots with empty "narration".`;
+  }
+  return `
+
+【解说旁白模式 — 硬性要求（用户已开启全片解说管线）】
+- 在 "storyboards" 数组的**每一个**镜头对象中必须有字符串字段 "narration"，且 **narration 一律不得为空字符串**（每镜至少一句完整解说，约 10～50 字，须在本镜 duration 秒内能读完）。
+- **shot_number 为 1 的第一个镜头**：必须有**开场解说**（交代时间、空间、氛围或悬念钩子），禁止以「纯建立镜头、无对白所以无旁白」为由留空；大远景/远景用旁白描述环境与基调，把观众带进故事。
+- **第 2 个镜头**：若仍为远景/大远景/环境铺垫，同样必须写旁白；**禁止第 1、2 镜连续留空**。
+- narration 为画外第三人称或纪录片式解说，与角色对白 dialogue 严格区分；对白只写在 dialogue，不要把对白原文复制进 narration。
+- 每镜 1～3 句为宜；禁止连续多个镜头的 narration 为空。`;
+}
+
 function formatUserPrompt(cfg, key, ...args) {
-  const style = cfg?.style?.default_style || '';
+  const style = styleTextForCfgLang(cfg);
   const imageRatio = cfg?.style?.default_image_ratio || '16:9';
   const templates = {
     en: {
@@ -345,7 +385,7 @@ function getStoryboardUserPromptSuffix(cfg, shotDuration) {
 }
 
 function getFirstFramePrompt(cfg) {
-  const style = cfg?.style?.default_style || '';
+  const style = styleTextEnForImage(cfg);
   const imageRatio = cfg?.style?.default_image_ratio || '16:9';
   if (isEnglish(cfg)) {
     return `You are a professional cinematic storyboard image prompt expert. Generate AI image generation prompts based on the shot information provided.
@@ -418,7 +458,7 @@ JSON字段：
 }
 
 function getKeyFramePrompt(cfg) {
-  const style = cfg?.style?.default_style || '';
+  const style = styleTextEnForImage(cfg);
   const imageRatio = cfg?.style?.default_image_ratio || '16:9';
   if (isEnglish(cfg)) {
     return `You are a professional cinematic storyboard image prompt expert. Generate AI image generation prompts based on the shot information provided.
@@ -493,7 +533,7 @@ JSON字段：
 }
 
 function getLastFramePrompt(cfg) {
-  const style = cfg?.style?.default_style || '';
+  const style = styleTextEnForImage(cfg);
   const imageRatio = cfg?.style?.default_image_ratio || '16:9';
   if (isEnglish(cfg)) {
     return `You are a professional cinematic storyboard image prompt expert. Generate AI image generation prompts based on the shot information provided.
@@ -571,7 +611,9 @@ JSON字段：
 
 /** 道具提取系统提示词（system prompt，剧本内容由 user prompt 单独传入） */
 function getPropExtractionPrompt(cfg) {
-  const style = (cfg?.style?.default_style || '') + ', ' + (cfg?.style?.default_prop_style || '');
+  const base = styleTextForCfgLang(cfg);
+  const propExtra = (cfg?.style?.default_prop_style || '').toString().trim();
+  const style = [base, propExtra].filter(Boolean).join(', ');
   const imageRatio = cfg?.style?.default_prop_ratio || cfg?.style?.default_image_ratio || '16:9';
   if (isEnglish(cfg)) {
     return `You are a professional script prop analyst, skilled at extracting key props with visual characteristics from scripts.
@@ -621,9 +663,8 @@ Each object containing:
 }
 
 function getSceneExtractionPrompt(cfg, style) {
-  const defaultScene = cfg?.style?.default_style || '';
   const styleText = (style || '').toString().trim();
-  const s = styleText || defaultScene;
+  const s = styleText || styleTextForCfgLang(cfg);
   const imageRatio = cfg?.style?.default_image_ratio || '16:9';
   if (isEnglish(cfg)) {
     return `[Task] Extract all unique scene backgrounds from the script
@@ -801,7 +842,7 @@ function getLockedSuffix(key) {
  * 场景四视图提示词生成：文本AI将场景描述转化为四格场景参考图提示词
  */
 function getScenePolishPrompt(cfg) {
-  const style = cfg?.style?.default_style || '';
+  const style = styleTextZhForPolish(cfg);
   return `# 场景四视图参考图生成器
 
 ## 你的身份
@@ -926,7 +967,7 @@ function getSceneGenerateImagePrompt() {
  * 角色四视图提示词生成：文本AI将角色外貌描述转化为标准四视图绘图提示词
  */
 function getRolePolishPrompt(cfg) {
-  const style = cfg?.style?.default_style || '';
+  const style = styleTextZhForPolish(cfg);
   return `# 角色四视图标准提示词生成器
 
 ## 你的身份
@@ -1181,7 +1222,8 @@ Rules:
  * 将道具描述转换为精准的 AI 绘图提示词（单图，突出道具本体）
  */
 function getPropPolishPrompt(cfg) {
-  const style = cfg?.style?.default_style || '';
+  const styleZh = styleTextZhForPolish(cfg);
+  const styleEn = styleTextEnForImage(cfg);
   return `# 道具图片提示词生成器
 
 ## 你的身份
@@ -1193,7 +1235,7 @@ function getPropPolishPrompt(cfg) {
 - **主体突出**：画面中心必须是道具本体，占据画面 60% 以上
 - **背景简洁**：纯色背景或渐变背景，禁止复杂环境背景
 - **细节精准**：材质质感、光泽、颜色要具体可描绘（如"哑光黑色金属表面，轻微划痕，油迹反光"）
-- **禁止添加**：人物、角色手持、场景环境、文字标注${style ? '\n- **画风风格**：' + style : ''}
+- **禁止添加**：人物、角色手持、场景环境、文字标注${styleZh ? '\n- **画风风格**：' + styleZh : ''}
 
 ### 视角与构图
 - 使用 3/4 俯视角或正面视角，展示道具最具辨识度的面
@@ -1201,7 +1243,7 @@ function getPropPolishPrompt(cfg) {
 
 ### 输出格式
 直接输出一段英文 prompt（约 60-120 词），不要任何解释、标题或列表。
-格式：[道具名称及类型], [材质与质感描述], [颜色与光泽], [尺寸感与细节], [构图], [背景], [光线], [画风]${style ? ', ' + style + ' style' : ''}`;
+格式：[道具名称及类型], [材质与质感描述], [颜色与光泽], [尺寸感与细节], [构图], [背景], [光线], [画风]${styleEn ? ', ' + styleEn + ' style' : ''}`;
 }
 
 module.exports = {
@@ -1216,6 +1258,7 @@ module.exports = {
   getSceneExtractionPrompt,
   getStoryboardSystemPrompt,
   getStoryboardUserPromptSuffix,
+  getStoryboardNarrationExtraInstructions,
   getStoryExpansionSystemPrompt,
   buildStoryExpansionUserPrompt,
   getRolePolishPrompt,

@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const response = require('../response');
 const storyboardService = require('../services/storyboardService');
 const episodeStoryboardService = require('../services/episodeStoryboardService');
@@ -5,6 +7,30 @@ const framePromptService = require('../services/framePromptService');
 const aiClient = require('../services/aiClient');
 const promptI18n = require('../services/promptI18n');
 const angleService = require('../services/angleService');
+
+/**
+ * 分镜主图路径：storyboards.local_path 常与图生记录不同步（图在 image_generations），按存在性解析。
+ * @returns {string|null} storage 相对路径
+ */
+function resolveStoryboardImageLocalPath(db, storageBase, storyboardId, sbRow) {
+  const normalizeRel = (rel) => (rel && String(rel).trim() ? String(rel).trim().replace(/^\//, '') : '');
+  const tryRel = (rel) => {
+    const r = normalizeRel(rel);
+    if (!r) return null;
+    const abs = path.join(storageBase, r);
+    return fs.existsSync(abs) ? r : null;
+  };
+  const fromSb = tryRel(sbRow?.local_path);
+  if (fromSb) return fromSb;
+  const ig = db.prepare(
+    `SELECT local_path FROM image_generations
+     WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL
+       AND local_path IS NOT NULL AND TRIM(local_path) != ''
+     ORDER BY id DESC
+     LIMIT 1`
+  ).get(storyboardId);
+  return tryRel(ig?.local_path);
+}
 
 function routes(db, log) {
   return {
@@ -130,12 +156,18 @@ function routes(db, log) {
           dramaId = ep?.drama_id ?? null;
         } catch (_) {}
 
-        // 获取风格配置
+        // 画风：优先剧集 metadata（前端写入的 prompt），否则全局配置
         let style = '';
         try {
           const loadConfig = require('../config').loadConfig;
           const cfg = loadConfig();
-          style = cfg?.style?.default_style || '';
+          const { styleFieldsFromDramaRow } = require('../utils/dramaStyleMerge');
+          if (dramaId) {
+            const dr = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(dramaId);
+            const f = styleFieldsFromDramaRow(dr);
+            style = f.en || f.zh || f.legacy || '';
+          }
+          if (!style) style = (cfg?.style?.default_style_en || cfg?.style?.default_style || '').trim();
         } catch (_) {}
 
         // 获取前后镜头上下文（含上一镜头连戏状态快照）
@@ -244,18 +276,15 @@ function routes(db, log) {
         'SELECT id, local_path, image_url FROM storyboards WHERE id = ? AND deleted_at IS NULL'
       ).get(id);
       if (!row) return response.notFound(res, '分镜不存在');
-      const localPath = row.local_path;
-      if (!localPath) return response.badRequest(res, '分镜没有本地图片，无法超分');
       try {
-        const fs = require('fs');
-        const path = require('path');
         const loadConfig = require('../config').loadConfig;
         const cfg = loadConfig();
         const storageBase = path.isAbsolute(cfg.storage?.local_path)
           ? cfg.storage.local_path
           : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
+        const localPath = resolveStoryboardImageLocalPath(db, storageBase, id, row);
+        if (!localPath) return response.badRequest(res, '分镜没有本地图片，无法超分');
         const srcFile = path.join(storageBase, localPath);
-        if (!fs.existsSync(srcFile)) return response.badRequest(res, '本地文件不存在');
         let sharp; try { sharp = require('sharp'); } catch (_) { sharp = null; }
         if (!sharp) return response.badRequest(res, 'sharp 模块不可用，无法超分');
         const info = await sharp(srcFile).metadata();

@@ -1,10 +1,18 @@
 import request from '@/utils/request'
 
 export const uploadAPI = {
-  /** 上传图片文件，返回 { url, local_path }。需传 File 对象 */
-  uploadImage(file) {
+  /**
+   * 上传图片文件，返回 { url, local_path }。需传 File 对象。
+   * @param {File} file
+   * @param {{ dramaId?: number|string|null }} [opts] 有剧集 id 时写入 projects/…/uploads/，否则仍为根目录 uploads/
+   */
+  uploadImage(file, opts = {}) {
     const form = new FormData()
     form.append('file', file)
+    const did = opts.dramaId
+    if (did != null && did !== '' && Number(did) > 0) {
+      form.append('drama_id', String(did))
+    }
     return request.post('/upload/image', form, {
       headers: { 'Content-Type': 'multipart/form-data' }
     })

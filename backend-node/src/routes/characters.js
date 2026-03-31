@@ -1,5 +1,7 @@
+const path = require('path');
 const response = require('../response');
 const characterLibraryService = require('../services/characterLibraryService');
+const storageLayout = require('../services/storageLayout');
 
 function routes(db, cfg, log, uploadService) {
   return {
@@ -102,8 +104,15 @@ function routes(db, cfg, log, uploadService) {
         return response.badRequest(res, '请选择文件');
       }
       try {
-        const storagePath = cfg?.storage?.local_path || './data/storage';
+        const rawStorage = cfg?.storage?.local_path || './data/storage';
+        const storagePath = path.isAbsolute(rawStorage)
+          ? rawStorage
+          : path.join(process.cwd(), rawStorage);
         const baseUrl = cfg?.storage?.base_url || '';
+        const charRow = db
+          .prepare('SELECT drama_id FROM characters WHERE id = ? AND deleted_at IS NULL')
+          .get(Number(req.params.id));
+        const projectSubdir = storageLayout.getProjectStorageSubdir(db, charRow?.drama_id);
         const { url, local_path } = uploadService.uploadFile(
           storagePath,
           baseUrl,
@@ -111,7 +120,8 @@ function routes(db, cfg, log, uploadService) {
           req.file.buffer,
           req.file.originalname || 'image.png',
           req.file.mimetype,
-          'characters'
+          'characters',
+          projectSubdir
         );
         const out = characterLibraryService.uploadCharacterImage(db, log, req.params.id, url);
         if (!out.ok) {

@@ -67,7 +67,7 @@ function buildQueryUrl(config, taskId) {
   else if (isDashScope) defaultEp = '/api/v1/tasks/{taskId}';
   else defaultEp = '/video/task/{taskId}';
   let ep = config.query_endpoint || defaultEp;
-  ep = String(ep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId));
+  ep = String(ep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId)).replace(/\{id\}/gi, encodeURIComponent(taskId));
   if (!ep.startsWith('/')) ep = '/' + ep;
   return base + ep;
 }
@@ -95,17 +95,69 @@ function getModelFromConfig(config, preferredModel) {
   return models[0] || '';
 }
 
+/** 单层对象上的视频地址：兼容中转站使用 result_url 而非 video_url */
+function videoUrlFromRecord(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  return rec.video_url || rec.result_url || rec.url || rec.output_url || null;
+}
+
+/**
+ * OpenAI/Veo/Sora 类中转 JSON 中解析直链（含各层 result_url）
+ */
+function pickProxyVideoUrl(data) {
+  if (!data || typeof data !== 'object') return null;
+  let u = videoUrlFromRecord(data);
+  if (u) return u;
+  const d = data.data;
+  if (d && typeof d === 'object' && !Array.isArray(d)) {
+    u = videoUrlFromRecord(d);
+    if (u) return u;
+  }
+  const r = data.result;
+  if (r && typeof r === 'object') {
+    u = videoUrlFromRecord(r);
+    if (u) return u;
+  }
+  const c = data.content;
+  if (c && typeof c === 'object') {
+    u = videoUrlFromRecord(c);
+    if (u) return u;
+  }
+  for (const k of ['videos', 'generations', 'works']) {
+    const arr = data[k];
+    if (Array.isArray(arr) && arr[0]) {
+      u = videoUrlFromRecord(arr[0]);
+      if (u) return u;
+      const res = arr[0].resource;
+      if (res && res.resource) return res.resource;
+    }
+  }
+  if (Array.isArray(d) && d[0]) {
+    u = videoUrlFromRecord(d[0]);
+    if (u) return u;
+  }
+  return null;
+}
+
 // ? DashScope ?????????? URL
 function parseDashScopeVideoUrl(data) {
   const out = data?.output;
   if (!out) return null;
-  if (out.video_url) return out.video_url;
-  if (out.output && out.output.video_url) return out.output.video_url;
+  let u = videoUrlFromRecord(out);
+  if (u) return u;
+  if (out.output && typeof out.output === 'object') {
+    u = videoUrlFromRecord(out.output);
+    if (u) return u;
+  }
   const results = out.results || out.result;
   if (Array.isArray(results) && results[0]) {
-    const r = results[0];
-    if (r.video_url) return r.video_url;
-    if (r.output && r.output.video_url) return r.output.video_url;
+    const rec = results[0];
+    u = videoUrlFromRecord(rec);
+    if (u) return u;
+    if (rec.output && typeof rec.output === 'object') {
+      u = videoUrlFromRecord(rec.output);
+      if (u) return u;
+    }
   }
   const choices = out.choices;
   if (Array.isArray(choices) && choices[0]) {
@@ -113,7 +165,10 @@ function parseDashScopeVideoUrl(data) {
     const msg = c?.message?.content || c?.content;
     if (Array.isArray(msg)) {
       for (const m of msg) {
-        if (m && (m.video_url || m.url)) return m.video_url || m.url;
+        if (m) {
+          u = videoUrlFromRecord(m);
+          if (u) return u;
+        }
       }
     }
   }
@@ -742,12 +797,7 @@ async function callVeo3VideoApi(config, log, opts) {
     return { error: 'Veo3 bad response: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
   }
 
-  const directUrl =
-    data.video_url || data.url ||
-    data.data?.video_url || data.data?.url ||
-    data.result?.url || data.result?.video_url ||
-    (Array.isArray(data.videos) && data.videos[0]?.url) ||
-    (Array.isArray(data.data) && data.data[0]?.url);
+  const directUrl = pickProxyVideoUrl(data);
   if (directUrl) {
     log.info('[Veo3] direct video URL', { video_url: directUrl, video_gen_id });
     return { video_url: directUrl };
@@ -944,13 +994,8 @@ async function callSoraVideoApi(config, log, opts) {
     return { error: 'Sora ??????: ' + e.message + ' | raw: ' + raw.slice(0, 200) };
   }
 
-  // ?????? URL
-  const directUrl =
-    data.video_url || data.url ||
-    data.data?.video_url || data.data?.url ||
-    data.result?.video_url || data.result?.url ||
-    (Array.isArray(data.generations) && data.generations[0]?.url) ||
-    (Array.isArray(data.data) && data.data[0]?.url);
+  // ?????? URL（含中转 result_url）
+  const directUrl = pickProxyVideoUrl(data);
   if (directUrl) {
     log.info('[Sora] ?????? URL', { video_url: directUrl, video_gen_id });
     return { video_url: directUrl };
@@ -1163,7 +1208,7 @@ async function callVideoApi(db, log, opts) {
   log.info('Video API parsed response', { video_gen_id, data: JSON.stringify(data).slice(0, 500) });
   const taskId = data.id || data.task_id || (data.data && data.data.id);
   const status = data.status || (data.data && data.data.status);
-  const videoUrl = data.video_url || (data.data && data.data.video_url) || (data.content && data.content.video_url);
+  const videoUrl = pickProxyVideoUrl(data);
   if (videoUrl) {
     log.info('Video API returned video_url directly', { video_gen_id, video_url: videoUrl });
     return { video_url: videoUrl };
@@ -1204,7 +1249,7 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         else if (taskId.startsWith('mc:'))  { actualTaskId = taskId.slice(3); videoType = 'motion-control'; }
         // 若用户配置了 query_endpoint，优先使用
         let qep = config.query_endpoint || `/v1/videos/${videoType}/{taskId}`;
-        qep = String(qep).replace(/\{taskId\}/gi, encodeURIComponent(actualTaskId)).replace(/\{task_id\}/gi, encodeURIComponent(actualTaskId));
+        qep = String(qep).replace(/\{taskId\}/gi, encodeURIComponent(actualTaskId)).replace(/\{task_id\}/gi, encodeURIComponent(actualTaskId)).replace(/\{id\}/gi, encodeURIComponent(actualTaskId));
         if (!qep.startsWith('/')) qep = '/' + qep;
         url = klingBase + qep;
         headers = { Authorization: 'Bearer ' + (config.api_key || '') };
@@ -1217,7 +1262,7 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         const isOfficialVidu = /api\.vidu\.cn/i.test(viduBase);
         const defaultQep = isOfficialVidu ? '/ent/v2/tasks/{taskId}/creations' : '/ent/v2/tasks/{taskId}/creations';
         let qep = config.query_endpoint || defaultQep;
-        qep = String(qep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId));
+        qep = String(qep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId)).replace(/\{id\}/gi, encodeURIComponent(taskId));
         if (!qep.startsWith('/')) qep = '/' + qep;
         url = viduBase + qep;
         headers = { Authorization: (isOfficialVidu ? 'Token ' : 'Bearer ') + (config.api_key || '') };
@@ -1268,12 +1313,7 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
           log.warn('[Veo3 poll] task failed', { video_gen_id: videoGenId, msg });
           return { error: String(msg) };
         }
-        const videoUrl =
-          data.video_url || data.url || data.output_url ||
-          data.data?.video_url || data.data?.url ||
-          data.result?.url || data.result?.video_url ||
-          (Array.isArray(data.videos) && data.videos[0]?.url) ||
-          (Array.isArray(data.works) && data.works[0]?.resource?.resource);
+        const videoUrl = pickProxyVideoUrl(data);
         if (videoUrl) {
           log.info('[Veo3 poll] video completed', { video_gen_id: videoGenId, video_url: videoUrl });
           return { video_url: videoUrl };
@@ -1294,12 +1334,7 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
           return { error: String(msg) };
         }
         // succeeded / completed / done ? ??? URL
-        const videoUrl =
-          data.video_url || data.url || data.output_url ||
-          data.data?.video_url || data.data?.url ||
-          data.result?.url || data.result?.video_url ||
-          (Array.isArray(data.videos) && data.videos[0]?.url) ||
-          (Array.isArray(data.generations) && data.generations[0]?.url);
+        const videoUrl = pickProxyVideoUrl(data);
         if (videoUrl) {
           log.info('[Sora poll] ????', { video_gen_id: videoGenId, video_url: videoUrl });
           return { video_url: videoUrl };
@@ -1324,11 +1359,8 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         // ??????????????? succeeded/completed/done???? video_url/url ?
         const videoUrl =
           data?.creations?.[0]?.url ||
-          data?.video_url || data?.url ||
-          data?.data?.video_url || data?.data?.url ||
-          data?.result?.url ||
-          (Array.isArray(data?.works) && data.works[0]?.resource?.resource) ||
-          (Array.isArray(data?.videos) && data.videos[0]?.url);
+          videoUrlFromRecord(data?.creations?.[0]) ||
+          pickProxyVideoUrl(data);
         if (videoUrl) {
           log.info('[Vidu poll] ????', { video_gen_id: videoGenId, video_url: videoUrl });
           return { video_url: videoUrl };
@@ -1370,13 +1402,8 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         continue;
       }
       const status = data.status || (data.data && data.data.status);
-      // ?????????? video_url / Sora url / generations[].url / data.data.*
-      const videoUrl =
-        data.video_url || data.url ||
-        (data.data && (data.data.video_url || data.data.url)) ||
-        (data.content && data.content.video_url) ||
-        (Array.isArray(data.generations) && data.generations[0]?.url) ||
-        (Array.isArray(data.data) && data.data[0]?.url);
+      // ?????????? video_url / result_url / Sora url / generations[].url / data.data.*
+      const videoUrl = pickProxyVideoUrl(data);
       const errMsg = data.error && (typeof data.error === 'string' ? data.error : data.error.message);
       if (videoUrl) return { video_url: videoUrl };
       if (status === 'failed' || status === 'error' || status === 'cancelled' || errMsg) return { error: errMsg || status || '????' };

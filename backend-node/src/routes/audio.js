@@ -11,16 +11,29 @@ function routes(db, log, cfg) {
   }
 
   return {
-    /** 为单条分镜对白生成 TTS 语音 */
+    /** 为单条分镜生成 TTS：对白 → audio_local_path；旁白 → narration_audio_local_path（body.tts_kind === 'narration'） */
     extract: async (req, res) => {
-      const { storyboard_id, text } = req.body || {};
+      const { storyboard_id, text, tts_kind } = req.body || {};
       if (!text && !storyboard_id) return response.badRequest(res, '请提供 storyboard_id 或 text');
+      const kind = String(tts_kind || 'dialogue').toLowerCase() === 'narration' ? 'narration' : 'dialogue';
       let ttsText = text;
-      if (!ttsText && storyboard_id) {
-        const row = db.prepare('SELECT dialogue FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(storyboard_id));
-        ttsText = row?.dialogue;
+      if (kind === 'narration') {
+        if ((!ttsText || !String(ttsText).trim()) && storyboard_id) {
+          const row = db.prepare('SELECT narration FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(storyboard_id));
+          ttsText = row?.narration;
+        }
+        if (!ttsText || !String(ttsText).trim()) {
+          return response.badRequest(res, '分镜解说旁白为空，无法合成语音');
+        }
+      } else {
+        if ((!ttsText || !String(ttsText).trim()) && storyboard_id) {
+          const row = db.prepare('SELECT dialogue FROM storyboards WHERE id = ? AND deleted_at IS NULL').get(Number(storyboard_id));
+          ttsText = row?.dialogue;
+        }
+        if (!ttsText || !String(ttsText).trim()) {
+          return response.badRequest(res, '分镜对白为空，无法合成语音');
+        }
       }
-      if (!ttsText || !ttsText.trim()) return response.badRequest(res, '分镜对白为空，无法合成语音');
       try {
         const ttsService = require('../services/ttsService');
         const result = await ttsService.synthesize(db, log, {
@@ -28,16 +41,21 @@ function routes(db, log, cfg) {
           storyboard_id: storyboard_id || null,
           storage_base: getStoragePath(),
         });
-        // 保存音频路径到分镜
         if (storyboard_id && result.local_path) {
           const now = new Date().toISOString();
           try {
-            db.prepare('UPDATE storyboards SET audio_local_path = ?, updated_at = ? WHERE id = ?').run(
-              result.local_path, now, Number(storyboard_id)
-            );
+            if (kind === 'narration') {
+              db.prepare('UPDATE storyboards SET narration_audio_local_path = ?, updated_at = ? WHERE id = ?').run(
+                result.local_path, now, Number(storyboard_id)
+              );
+            } else {
+              db.prepare('UPDATE storyboards SET audio_local_path = ?, updated_at = ? WHERE id = ?').run(
+                result.local_path, now, Number(storyboard_id)
+              );
+            }
           } catch (_) {}
         }
-        response.success(res, { local_path: result.local_path, url: result.local_path ? '/static/' + result.local_path : '' });
+        response.success(res, { local_path: result.local_path, url: result.local_path ? '/static/' + result.local_path : '', tts_kind: kind });
       } catch (err) {
         log.error('audio extract', { error: err.message });
         response.internalError(res, err.message);

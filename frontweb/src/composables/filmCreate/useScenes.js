@@ -156,7 +156,7 @@ export function useScenes(deps) {
     if (!refImg || !sceneId) return
     try {
       const file = dataUrlToFile(refImg.dataUrl, refImg.filename || 'reference.png')
-      const uploadRes = await uploadAPI.uploadImage(file)
+      const uploadRes = await uploadAPI.uploadImage(file, { dramaId: dramaId.value })
       const refPath = uploadRes.local_path || uploadRes.url || ''
       await sceneAPI.putRefImage(sceneId, refPath)
     } catch (e) {

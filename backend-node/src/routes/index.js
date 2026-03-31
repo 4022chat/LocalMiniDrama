@@ -34,7 +34,7 @@ function setupRouter(cfg, db, log) {
   const sceneLibrary = sceneLibraryRoutes(db, cfg, log);
   const propLibrary = propLibraryRoutes(db, cfg, log);
   const characters = characterRoutes(db, cfg, log, uploadService);
-  const uploadHandlers = uploadModule.routes(cfg, log);
+  const uploadHandlers = uploadModule.routes(cfg, log, db);
   const scenes = sceneRoutes(db, log, cfg);
   const storyboards = storyboardRoutes(db, log);
   const images = imageRoutes(db, cfg, log);

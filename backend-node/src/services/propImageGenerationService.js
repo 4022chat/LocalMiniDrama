@@ -4,6 +4,7 @@ const taskService = require('./taskService');
 const imageClient = require('./imageClient');
 const propService = require('./propService');
 const uploadService = require('./uploadService');
+const storageLayout = require('./storageLayout');
 const { aspectRatioToSize } = require('./imageService');
 
 function appendPrompt(base, extra) {
@@ -31,9 +32,16 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
   }
 
   const loadConfig = require('../config').loadConfig;
-  const cfg = loadConfig();
+  const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
+  let cfg = loadConfig();
+  if (prop.drama_id) {
+    try {
+      const dr = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(prop.drama_id);
+      cfg = mergeCfgStyleWithDrama(cfg, dr || {});
+    } catch (_) {}
+  }
   const styleOverride = (opts && opts.style) ? String(opts.style).trim() : '';
-  const baseStyle = styleOverride || (cfg?.style?.default_style || '');
+  const baseStyle = styleOverride || (cfg?.style?.default_style_en || cfg?.style?.default_style || '');
   let style = '';
   style = appendPrompt(style, baseStyle);
   if (!styleOverride) {
@@ -98,12 +106,14 @@ async function processPropImageGeneration(db, log, taskId, propId, opts) {
     const storagePath = path.isAbsolute(cfg.storage?.local_path)
       ? cfg.storage.local_path
       : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
+    const projectSubdir = storageLayout.getProjectStorageSubdir(db, prop.drama_id);
     localPath = await uploadService.downloadImageToLocal(
       storagePath,
       result.image_url,
-      'images',
+      'props',
       log,
-      'prop_' + propId
+      'prop_' + propId,
+      projectSubdir
     );
   } catch (_) {}
 

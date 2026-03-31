@@ -1,5 +1,6 @@
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
+const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
 
 function listByDramaId(db, dramaId) {
   const rows = db.prepare(
@@ -104,14 +105,29 @@ async function generatePropPromptOnly(db, log, cfg, propId, modelName, style) {
   const prop = getById(db, propId);
   if (!prop) return { ok: false, error: 'prop not found' };
 
+  const dramaRow = prop.drama_id
+    ? db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(prop.drama_id)
+    : null;
+  let polishCfg = mergeCfgStyleWithDrama(cfg, dramaRow || {});
+  const so = (style && String(style).trim()) || '';
+  if (so) {
+    polishCfg = {
+      ...polishCfg,
+      style: {
+        ...polishCfg.style,
+        default_style_zh: so,
+        default_style_en: so,
+        default_style: so,
+      },
+    };
+  }
+
   const descText = [
     prop.name ? `道具名称：${prop.name}` : '',
     prop.type ? `道具类型：${prop.type}` : '',
     prop.description ? `道具描述：${prop.description}` : '',
   ].filter(Boolean).join('\n') || prop.name || '';
 
-  const styleText = (style && String(style).trim()) || cfg?.style?.default_style || '';
-  const polishCfg = { ...cfg, style: { ...(cfg?.style || {}), default_style: styleText } };
   const systemPrompt = promptI18n.getPropPolishPrompt(polishCfg);
   const userPrompt = `请为以下道具生成图片提示词：\n\n${descText}`;
 

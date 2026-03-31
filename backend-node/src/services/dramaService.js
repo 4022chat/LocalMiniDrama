@@ -1,5 +1,7 @@
 // 对应 Go application/services/drama_service.go
 
+const storageLayout = require('./storageLayout');
+
 /**
  * 清理 image_url：如果数据库中存储的是 base64 data URL，则返回 null。
  * 图片应通过 local_path → /static/{local_path} 访问，base64 不应通过 API 透传（会严重膨胀响应体）。
@@ -12,7 +14,21 @@ function sanitizeImageUrl(url) {
 
 function createDrama(db, log, req) {
   const now = new Date().toISOString();
-  const metadataStr = req.metadata ? (typeof req.metadata === 'string' ? req.metadata : JSON.stringify(req.metadata)) : null;
+  let meta = {};
+  if (req.metadata) {
+    try {
+      meta =
+        typeof req.metadata === 'string'
+          ? JSON.parse(req.metadata)
+          : { ...req.metadata };
+    } catch (_) {
+      meta = {};
+    }
+  }
+  if (!meta.storage_folder_label) {
+    meta.storage_folder_label = storageLayout.sanitizeFolderLabel(req.title || '');
+  }
+  const metadataStr = Object.keys(meta).length ? JSON.stringify(meta) : null;
   const stmt = db.prepare(`
     INSERT INTO dramas (title, description, genre, style, metadata, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, 'draft', ?, ?)
@@ -221,11 +237,11 @@ function updateDrama(db, log, dramaId, req) {
 
 function generateStoryboard(db, log, episodeId, options) {
   const episodeStoryboardService = require('./episodeStoryboardService');
-  const { model, style, storyboard_count, video_duration, aspect_ratio } = options || {};
+  const { model, style, storyboard_count, video_duration, aspect_ratio, include_narration } = options || {};
   // 转换可能为字符串的数字
   const count = storyboard_count ? Number(storyboard_count) : undefined;
   const duration = video_duration ? Number(video_duration) : undefined;
-  return episodeStoryboardService.generateStoryboard(db, log, episodeId, model || undefined, style, count, duration, aspect_ratio);
+  return episodeStoryboardService.generateStoryboard(db, log, episodeId, model || undefined, style, count, duration, aspect_ratio, include_narration);
 }
 
 function deleteDrama(db, log, dramaId) {
@@ -312,6 +328,7 @@ function rowToStoryboard(r) {
     time: r.time,
     duration: r.duration ?? 0,
     dialogue: r.dialogue,
+    narration: r.narration ?? null,
     action: r.action,
     result: r.result ?? null,
     atmosphere: r.atmosphere,
@@ -335,6 +352,8 @@ function rowToStoryboard(r) {
       local_path: r.local_path ?? null,
       main_panel_idx: r.main_panel_idx != null ? Number(r.main_panel_idx) : null,
       video_url: r.video_url,
+      audio_local_path: r.audio_local_path ?? null,
+      narration_audio_local_path: r.narration_audio_local_path ?? null,
       status: r.status || 'pending',
       error_msg: r.error_msg,
       created_at: r.created_at,
@@ -640,7 +659,7 @@ function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
   return sbUrl;
 }
 
-function finalizeEpisode(db, log, episodeId, baseUrl) {
+function finalizeEpisode(db, log, episodeId, baseUrl, body = {}) {
   const ep = db.prepare('SELECT id, drama_id, episode_number FROM episodes WHERE id = ? AND deleted_at IS NULL').get(episodeId);
   if (!ep) return null;
   const drama = db.prepare('SELECT title FROM dramas WHERE id = ? AND deleted_at IS NULL').get(ep.drama_id);
@@ -674,6 +693,13 @@ function finalizeEpisode(db, log, episodeId, baseUrl) {
     title,
     scenes,
     provider: 'ffmpeg',
+    merge_options: {
+      burn_narration_subtitles: !!(body && body.burn_narration_subtitles),
+      burn_dialogue_audio: !!(body && body.burn_dialogue_audio),
+      watermark_text: (body && body.watermark_text != null)
+        ? String(body.watermark_text).trim().slice(0, 200)
+        : '',
+    },
   };
   const created = videoMergeService.create(db, log, mergeReq);
   const mergeId = created.merge_id || created.id;

@@ -58,6 +58,7 @@ const fs = require('fs');
 const imageClient = require('./imageClient');
 const taskService = require('./taskService');
 const uploadService = require('./uploadService');
+const storageLayout = require('./storageLayout');
 const aiClient = require('./aiClient');
 const promptI18n = require('./promptI18n');
 
@@ -185,8 +186,8 @@ async function buildQuadGridPrompt(db, log, cfg, storyboardId, model) {
   log.info('[四宫格] key2.prompt:\n' + key2.prompt);
   log.info('[四宫格] last.prompt:\n' + last.prompt);
 
-  const style = cfg?.style?.default_style || '';
-  const styleNote = style ? `. Art style: ${style}` : '';
+  const rawStyle = (cfg?.style?.default_style_en || cfg?.style?.default_style || '').toString().trim();
+  const styleNote = rawStyle ? `. Art style: ${rawStyle}` : '';
   const quadPrompt = `Create a 2x2 grid storyboard image with EXACTLY 4 equal-sized panels arranged in 2 rows and 2 columns (like a coordinate quadrant layout). Each panel occupies exactly one quadrant of the image. NO borders of any color (black, white, gray), NO dividing lines, NO frames between panels — the 4 panels must be seamlessly adjacent with no gaps or separators${styleNote}.
 
 Each panel uses a DIFFERENT camera angle to show the same scene from varied perspectives — this is intentional and required.
@@ -241,8 +242,8 @@ async function buildNineGridPrompt(db, log, cfg, storyboardId, model) {
   log.info('[九宫格] 9帧提示词生成完成', { storyboard_id: storyboardId });
   frames.forEach((f, i) => log.info(`[九宫格] panel${i}.prompt:\n` + f.prompt));
 
-  const style = cfg?.style?.default_style || '';
-  const styleNote = style ? `. Art style: ${style}` : '';
+  const rawStyle = (cfg?.style?.default_style_en || cfg?.style?.default_style || '').toString().trim();
+  const styleNote = rawStyle ? `. Art style: ${rawStyle}` : '';
   const ROWS = [
     [0, 1, 2],
     [3, 4, 5],
@@ -693,6 +694,29 @@ async function processImageGeneration(db, log, imageGenId) {
             }
           } catch (_) {}
         }
+        // ── 分镜关联道具（storyboard_props）→ 参考图（前端「物品」与 DB 一致，此前未参与 Step2）──
+        try {
+          const propLinks = db.prepare('SELECT prop_id FROM storyboard_props WHERE storyboard_id = ?').all(row.storyboard_id);
+          const REF_CAP = 4; // 与 imageClient.callGeminiImageApi MAX_GEMINI_REF_IMAGES 对齐
+          for (const link of propLinks) {
+            if (refs.length >= REF_CAP) break;
+            const prop = db.prepare(
+              'SELECT name, image_url, local_path, ref_image, extra_images FROM props WHERE id = ? AND deleted_at IS NULL'
+            ).get(Number(link.prop_id));
+            if (!prop) continue;
+            let propRef = prop.ref_image || prop.local_path || prop.image_url;
+            if (!propRef && prop.extra_images) {
+              try {
+                const extras = typeof prop.extra_images === 'string' ? JSON.parse(prop.extra_images) : prop.extra_images;
+                if (Array.isArray(extras) && extras[0]) propRef = extras[0];
+              } catch (_) {}
+            }
+            if (propRef && !refs.includes(propRef)) {
+              refs.push(propRef);
+              refLabels.push(`Image ${refs.length}: prop/object appearance reference for "${prop.name || 'prop'}"`);
+            }
+          }
+        } catch (_) {}
         // ── 补充：从 storyboard_characters 关联表查 character_libraries 的四视图 URL ──
         // 角色库中生成了四视图（four_view_image_url）的角色优先作为参考图
         try {
@@ -883,7 +907,14 @@ async function processImageGeneration(db, log, imageGenId) {
 
     // ── Step 3: 计算尺寸 ────────────────────────────────────────────
     const loadConfig = require('../config').loadConfig;
-    const cfg = loadConfig();
+    const { mergeCfgStyleWithDrama } = require('../utils/dramaStyleMerge');
+    let cfg = loadConfig();
+    if (row.drama_id) {
+      try {
+        const dr = db.prepare('SELECT style, metadata FROM dramas WHERE id = ? AND deleted_at IS NULL').get(row.drama_id);
+        cfg = mergeCfgStyleWithDrama(cfg, dr || {});
+      } catch (_) {}
+    }
     const filesBaseUrl = (cfg.storage && cfg.storage.base_url) ? String(cfg.storage.base_url).replace(/\/$/, '') : '';
     const storageLocalPath = path.isAbsolute(cfg.storage?.local_path)
       ? cfg.storage.local_path
@@ -929,7 +960,8 @@ async function processImageGeneration(db, log, imageGenId) {
         ).get();
         if (anyTextConfig) {
           log.info('[图生] Step3.5 文本AI优化 prompt 开始', { id: imageGenId, elapsed: elapsed() });
-          const style = cfg?.style?.default_style || '';
+          const rawSt = (cfg?.style?.default_style_en || cfg?.style?.default_style || '').toString().trim();
+          const style = rawSt || 'cinematic movie still, anamorphic lens, film grain, dramatic lighting, shallow depth of field, professional cinematography';
           const assetNames = (reference_context_note || '').split('\n')
             .map((l) => l.replace(/^Image \d+: [^"]*"([^"]+)".*/, '$1'))
             .filter(Boolean).join(', ');
@@ -973,7 +1005,7 @@ async function processImageGeneration(db, log, imageGenId) {
             sbDetail?.result     ? `RESULT: ${sbDetail.result}`        : null,
             sbDetail?.atmosphere ? `ATMOSPHERE: ${sbDetail.atmosphere}`: null,
             sbDetail?.shot_type  ? `SHOT_TYPE: ${sbDetail.shot_type}`  : null,
-            `STYLE: ${style || 'cinematic'}`,
+            `STYLE: ${style}`,
             `ASSETS: ${assetNames || 'none'}`,
             prevContinuityState  ? `PREV_CONTINUITY_STATE: ${JSON.stringify(prevContinuityState)}` : null,
             `CONTEXT_PREV: ${prevDesc}`,
@@ -1097,8 +1129,17 @@ async function processImageGeneration(db, log, imageGenId) {
       const storagePath = path.isAbsolute(cfg.storage?.local_path)
         ? cfg.storage.local_path
         : path.join(process.cwd(), cfg.storage?.local_path || './data/storage');
-      const category = row.scene_id != null ? 'scenes' : 'images';
-      localPath = await uploadService.downloadImageToLocal(storagePath, result.image_url, category, log, 'ig');
+      const category =
+        row.scene_id != null ? 'scenes' : row.character_id != null ? 'characters' : 'images';
+      const projectSubdir = storageLayout.getProjectStorageSubdir(db, row.drama_id);
+      localPath = await uploadService.downloadImageToLocal(
+        storagePath,
+        result.image_url,
+        category,
+        log,
+        'ig',
+        projectSubdir
+      );
       log.info('[图生] Step5 保存完成', { id: imageGenId, local_path: localPath, save_ms: Date.now() - tSave, elapsed: elapsed() });
     } catch (saveErr) {
       log.warn('[图生] Step5 保存失败（不影响结果）', { id: imageGenId, err: saveErr.message, elapsed: elapsed() });

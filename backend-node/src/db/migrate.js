@@ -141,6 +141,7 @@ function ensureAllColumns(database) {
     { name: 'time',              type: 'TEXT' },
     { name: 'duration',          type: 'REAL' },
     { name: 'dialogue',          type: 'TEXT' },
+    { name: 'narration',         type: 'TEXT' },
     { name: 'action',            type: 'TEXT' },
     { name: 'atmosphere',        type: 'TEXT' },
     { name: 'image_prompt',      type: 'TEXT' },
@@ -167,7 +168,8 @@ function ensureAllColumns(database) {
     { name: 'depth_of_field',    type: 'TEXT' },               // 景深（shallow/medium/deep/extreme_shallow）
     { name: 'polished_prompt',        type: 'TEXT' },               // 文字AI润色后的图片生成提示词（可编辑，生图时优先使用）
     { name: 'continuity_snapshot',   type: 'TEXT' },               // JSON: 连戏状态快照 {characters:{name:{position,clothing,expression,props}},lighting}
-    { name: 'audio_local_path',      type: 'TEXT' },               // TTS 合成的语音本地路径
+    { name: 'audio_local_path',      type: 'TEXT' },               // 对白 TTS 本地路径
+    { name: 'narration_audio_local_path', type: 'TEXT' },         // 解说旁白 TTS 本地路径
     { name: 'status',            type: 'TEXT DEFAULT \'draft\'' },
     { name: 'created_at',        type: 'TEXT' },
     { name: 'updated_at',        type: 'TEXT' },
@@ -357,6 +359,7 @@ function ensureAllColumns(database) {
     { name: 'model',        type: 'TEXT' },
     { name: 'status',       type: 'TEXT' },
     { name: 'scenes',       type: 'TEXT' },
+    { name: 'merge_options', type: 'TEXT' },
     { name: 'task_id',      type: 'TEXT' },
     { name: 'merged_url',   type: 'TEXT' },
     { name: 'duration',     type: 'INTEGER' },

@@ -62,13 +62,21 @@ function getFfprobePath() {
 }
 
 /**
- * 是否能找到本地 ffmpeg（找到任意候选路径或环境变量即为 true）。
- * 打包后不再仅检查 asar 内部路径，而是遍历所有候选。
+ * 是否能找到本地 ffmpeg（找到任意候选路径、环境变量或系统 PATH 中存在即为 true）。
  */
 function hasLocalFfmpeg() {
   const fromEnv = process.env.FFMPEG_PATH;
   if (fromEnv && fs.existsSync(fromEnv)) return true;
-  return getCandidatePaths(ffmpegName).some((p) => fs.existsSync(p));
+  if (getCandidatePaths(ffmpegName).some((p) => fs.existsSync(p))) return true;
+  
+  // 检查系统 PATH 中是否有 ffmpeg
+  try {
+    const { spawnSync } = require('child_process');
+    const res = spawnSync(ffmpegName, ['-version']);
+    if (res.status === 0) return true;
+  } catch (_) {}
+  
+  return false;
 }
 
 module.exports = {

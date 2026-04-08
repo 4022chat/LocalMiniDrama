@@ -646,14 +646,14 @@ function getVideoUrlForStoryboard(db, storyboardId, baseUrl) {
     "SELECT video_url, local_path, completed_at, updated_at, created_at FROM video_generations WHERE storyboard_id = ? AND status = 'completed' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1"
   ).get(storyboardId);
 
-  // 辅助函数：构造完整 URL
+  // 辅助函数：构造完整 URL，优先使用本地路径（避免远程URL过期导致无法合并）
   const buildUrl = (videoUrl, localPath) => {
-    if (videoUrl && String(videoUrl).trim()) return videoUrl;
     if (localPath && String(localPath).trim() && baseUrl) {
       const base = (baseUrl || '').replace(/\/$/, '');
       const p = String(localPath).replace(/^\//, '');
       return p ? base + '/' + p : null;
     }
+    if (videoUrl && String(videoUrl).trim()) return videoUrl;
     return null;
   };
 

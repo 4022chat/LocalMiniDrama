@@ -400,7 +400,7 @@ async function callVolcengineOmniVideoApi(config, log, opts) {
     video_gen_id,
   } = opts;
 
-  const url = buildVideoUrl(config);
+  const url = buildVideoUrl(config, { defaultEndpoint: '/v1/videos/generations' });
   const model = getModelFromConfig(config, preferredModel);
   const finalModel = normalizeVolcModel(model);
   const ratio = aspect_ratio || '16:9';
@@ -716,12 +716,17 @@ function getVolcVideoBase(config) {
   return base || 'https://ark.cn-beijing.volces.com/api/v3';
 }
 
-function buildVideoUrl(config) {
+/**
+ * 非官方火山厂商（中转、自托管等）走 OpenAI/即梦类路径；默认 /video/generations 为旧版中转。
+ * volcengine_omni 传入 defaultEndpoint: '/v1/videos/generations' 以对齐方舟文档与 302.ai / jimeng-free-api。
+ */
+function buildVideoUrl(config, options = {}) {
   const p = (config.provider || '').toLowerCase();
   const isVolc = p === 'volces' || p === 'volcengine' || p === 'volc';
   if (isVolc) return getVolcVideoBase(config) + VOLC_VIDEO_CREATE_PATH;
   const base = (config.base_url || '').replace(/\/$/, '');
-  let ep = config.endpoint || '/video/generations';
+  const fallbackEp = options.defaultEndpoint != null ? options.defaultEndpoint : '/video/generations';
+  let ep = config.endpoint || fallbackEp;
   if (!ep.startsWith('/')) ep = '/' + ep;
   return base + ep;
 }
@@ -739,6 +744,7 @@ function buildQueryUrl(config, taskId) {
   else if (proto === 'xai') defaultEp = '/v1/videos/{taskId}';
   else if (proto === 'veo3') defaultEp = '/v1/video/query?id={taskId}';
   else if (isDashScope) defaultEp = '/api/v1/tasks/{taskId}';
+  else if (proto === 'volcengine_omni') defaultEp = '/v1/videos/generations/async/{taskId}';
   else defaultEp = '/video/task/{taskId}';
   let ep = config.query_endpoint || defaultEp;
   ep = String(ep).replace(/\{taskId\}/gi, encodeURIComponent(taskId)).replace(/\{task_id\}/gi, encodeURIComponent(taskId)).replace(/\{id\}/gi, encodeURIComponent(taskId));

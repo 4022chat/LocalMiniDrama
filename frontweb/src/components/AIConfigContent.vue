@@ -635,7 +635,7 @@ input_reference = (图片文件，可选)</pre>
                     <div class="cfg-tip-content">
                       接口路径，追加在 Base URL 之后。<br>
                       <b>预设厂商</b>（火山 / 通义 / NanoBanana）留空，系统自动推断。<br>
-                      <b>视频自定义厂商</b>必须填写，如 /v1/video/generations<br>
+                      <b>视频自定义厂商</b>必须填写，如 /v1/videos/generations<br>
                       <b>NanoBanana 代理</b>填写代理路径，如 /fal-ai/nano-banana
                     </div>
                   </template>
@@ -643,7 +643,7 @@ input_reference = (图片文件，可选)</pre>
                 </el-tooltip>
               </span>
             </template>
-            <el-input v-model="form.endpoint" :placeholder="form.service_type === 'video' ? '自定义视频厂商必填，如 /v1/video/generations；预设厂商留空' : '代理或特殊厂商时填写，如 /fal-ai/nano-banana；预设厂商留空'" />
+            <el-input v-model="form.endpoint" :placeholder="form.service_type === 'video' ? '自定义视频厂商必填，如 /v1/videos/generations；预设厂商留空' : '代理或特殊厂商时填写，如 /fal-ai/nano-banana；预设厂商留空'" />
           </el-form-item>
           <el-form-item>
             <template #label>

@@ -2457,46 +2457,24 @@ const storyboardIncludeNarration = ref(false)
 const storyboardUniversalOmni = ref(true)
 const gridMode = ref('single') // 序列图模式：single / quad_grid / nine_grid
 
-// ── 剧本长度 → 估算总时长 / 分镜数（对齐参考前端 soullensV68 的镜数公式与节奏除数）──
-const SOUL_LENS_SHOT_DIVISOR = {
-  action: 5.4,
-  thriller: 5.8,
-  dialogue: 7.2,
-  lyrical: 7.8,
-  balanced: 6.5,
+// ── 剧本长度 → 估算总时长；自动分镜数与项目「每段秒数」(videoClipDuration) 对齐 ──
+
+/** 用于估算的每段时长（秒），与一键成片处「X秒/段」一致 */
+function clipSecondsForStoryboardEstimate() {
+  const c = Number(videoClipDuration.value)
+  return Math.max(2, Math.min(60, Number.isFinite(c) && c > 0 ? c : 5))
 }
 
-/** 由剧本关键词粗判节奏类型，决定 shotDivisor（与灵境 Si() 一致） */
-function soulLensRhythmKeyFromScript(text) {
-  const n = String(text || '').toLowerCase()
-  if (/(追逐|打斗|枪战|爆炸|战斗|搏斗|动作|逃亡|冲刺|对决|生死|危机|高速|追车)/.test(n)) return 'action'
-  if (/(悬疑|惊悚|恐怖|诡异|密室|跟踪|反转|谋杀|血迹|幽灵)/.test(n)) return 'thriller'
-  if (/(对白|谈话|对话|电话|会议|争吵|辩论|商量|盘问|闲聊)/.test(n)) return 'dialogue'
-  if (/(抒情|诗意|意境|独白|回忆|梦境|冥想|静默|凝望)/.test(n)) return 'lyrical'
-  return 'balanced'
-}
-
-function soulLensShotDivisorForScript(text) {
-  return SOUL_LENS_SHOT_DIVISOR[soulLensRhythmKeyFromScript(text)] ?? SOUL_LENS_SHOT_DIVISOR.balanced
-}
-
-/** 灵境 _i：总时长（秒）→ 镜数参考区间 */
-function soulLensShotCountRange(sec) {
-  const t = Math.max(5, Math.min(600, Math.round(Number(sec) || 0)))
-  if (t < 10) return { min: 1, max: 2 }
-  if (t < 20) return { min: 1, max: Math.ceil(t / 5) }
-  const n = Math.max(1, Math.floor(t / 15))
-  const o = Math.max(n, Math.ceil(t / 5))
-  return { min: n, max: Math.min(o, n * 3) }
-}
-
-/** 单段场次镜数锁定（灵境 ki 非 custom 分支） */
-function soulLensLockedShotCount(sec, shotDivisor) {
-  const d = Math.max(2, Math.round(Number(sec) || 0))
-  const div = shotDivisor || SOUL_LENS_SHOT_DIVISOR.balanced
-  const k = Math.ceil(d / 7)
-  const E = Math.max(k, Math.ceil(d / 4))
-  return Math.max(k, Math.min(E, Math.round(d / div)))
+/** 由估算总时长与每段秒数得镜数中枢与宽松参考区间（±1 镜） */
+function shotCountEstimateFromDurationSec(sec) {
+  const s = Math.max(10, Math.min(600, Math.round(Number(sec) || 0)))
+  const clip = clipSecondsForStoryboardEstimate()
+  const ideal = s / clip
+  const locked = Math.max(1, Math.min(200, Math.round(ideal)))
+  const minR = Math.max(1, locked - 1)
+  const maxR = Math.min(200, locked + 1)
+  const range = minR >= maxR ? { min: locked, max: locked } : { min: minR, max: maxR }
+  return { locked, range, clip }
 }
 
 /** 由剧本字符数粗估成片总时长（短剧偏长镜）：秒数 = round(10 + (字数/600)×60)，夹在 10–600s */
@@ -2507,17 +2485,15 @@ function estimateVideoDurationSecFromCharLen(charLen) {
   return Math.min(600, Math.max(10, raw))
 }
 
-/** 当前剧本下的估算：总秒数、镜数中枢、镜数区间、节奏除数 */
+/** 当前剧本下的估算：总秒数、镜数中枢、镜数区间、采用的每段秒数 */
 const scriptStoryboardEstimate = computed(() => {
   const script = (scriptContent.value || '').toString().trim()
   const len = script.length
   if (!len) return null
   const sec = estimateVideoDurationSecFromCharLen(len)
   if (sec == null) return null
-  const divisor = soulLensShotDivisorForScript(script)
-  const locked = soulLensLockedShotCount(sec, divisor)
-  const range = soulLensShotCountRange(sec)
-  return { sec, locked, range, divisor, len }
+  const { locked, range, clip } = shotCountEstimateFromDurationSec(sec)
+  return { sec, locked, range, clip, len }
 })
 
 const scriptEstimateVideoDurationHint = computed(() => {
@@ -2529,7 +2505,7 @@ const scriptEstimateVideoDurationHint = computed(() => {
 const scriptEstimateVideoDurationTitle = computed(() => {
   const e = scriptStoryboardEstimate.value
   if (!e) return ''
-  return `按当前剧本文本约 ${e.len} 字、短剧公式 round(10+(字/600)×60) 粗估总时长约 ${e.sec} 秒；未填输入框时该值会作为约束传给生成接口。仅供参考`
+  return `按当前剧本文本约 ${e.len} 个字符（含标点；常见汉字在浏览器里一字一算，并非按 UTF-8 字节翻倍）、短剧公式 round(10+(字符/600)×60) 粗估总时长约 ${e.sec} 秒；未填输入框时该值会作为约束传给生成接口。仅供参考`
 })
 
 const scriptEstimateStoryboardHint = computed(() => {
@@ -2544,8 +2520,7 @@ const scriptEstimateStoryboardHint = computed(() => {
 const scriptEstimateStoryboardTitle = computed(() => {
   const e = scriptStoryboardEstimate.value
   if (!e) return ''
-  const rhythm = soulLensRhythmKeyFromScript((scriptContent.value || '').toString().trim())
-  return `按估算时长 ${e.sec}s 与节奏「${rhythm}」（除数≈${e.divisor}s/镜）粗估约 ${e.locked} 镜；区间算法同灵境 _i。仅供参考`
+  return `按估算时长 ${e.sec}s ÷ 项目「每段 ${e.clip} 秒」四舍五入粗估约 ${e.locked} 镜；旁注区间为 ±1 镜供参考。切换「X秒/段」会同步改变本估算。`
 })
 
 function scriptTextTrimmedForEstimate() {
@@ -2570,13 +2545,12 @@ function getVideoDurationForApi() {
   return estimateVideoDurationSecFromCharLen(len) ?? undefined
 }
 
-/** 请求后端的分镜数量：仅未手动填时按灵境公式与当前采用的总秒数推算 */
+/** 请求后端的分镜数量：仅未手动填时按「估算总时长 ÷ 每段秒数」推算，与项目 X秒/段 一致 */
 function getStoryboardCountForApi() {
   if (userFilledStoryboardCount()) return Math.round(Number(storyboardCount.value))
   const sec = getVideoDurationForApi()
   if (sec == null || !Number.isFinite(sec)) return undefined
-  const divisor = soulLensShotDivisorForScript(scriptTextTrimmedForEstimate())
-  return Math.min(200, Math.max(1, soulLensLockedShotCount(sec, divisor)))
+  return shotCountEstimateFromDurationSec(sec).locked
 }
 
 function getFirstImageFile(dataTransfer) {

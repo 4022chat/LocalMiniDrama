@@ -229,10 +229,10 @@
         </div>
       </section>
 
-      <!-- 一键全流程生成 -->
+      <!-- 本集配置：成片流水线 + 分镜生成参数 -->
       <section class="section card pipeline-section">
         <div class="one-click-actions">
-          <span class="one-click-label">🚀 一键全流程</span>
+          <span class="one-click-label">本集配置</span>
           <el-select v-model="projectAspectRatio" style="width: 130px" @change="() => saveProjectSettings(false)">
             <el-option label="16:9 横屏" value="16:9" />
             <el-option label="9:16 竖屏" value="9:16" />
@@ -258,6 +258,51 @@
             :options="generationStyleOptions"
             @change="() => saveProjectSettings(true)"
           />
+        </div>
+        <div class="episode-sb-config-wrap">
+          <div class="sb-config-row episode-sb-config-row">
+            <label class="sb-config-item">
+              <span class="sb-config-label">分镜数量</span>
+              <el-input-number v-model="storyboardCount" :min="1" :max="200" :step="5" placeholder="自动" class="sb-config-input" />
+              <span class="sb-config-hint sb-config-hint--estimate" :title="scriptEstimateStoryboardTitle">留空由 AI 决定{{ scriptEstimateStoryboardHint }}</span>
+            </label>
+            <span class="sb-config-divider">｜</span>
+            <label class="sb-config-item">
+              <span class="sb-config-label">视频总时长(秒)</span>
+              <el-input-number v-model="videoDuration" :min="10" :max="600" :step="5" placeholder="自动" class="sb-config-input" />
+              <span class="sb-config-hint sb-config-hint--estimate" :title="scriptEstimateVideoDurationTitle">留空由 AI 决定{{ scriptEstimateVideoDurationHint }}</span>
+            </label>
+            <span class="sb-config-divider">｜</span>
+            <label class="sb-config-item">
+              <span class="sb-config-label">序列图模式</span>
+              <el-select v-model="gridMode" size="small" style="width:110px">
+                <el-option label="单张" value="single" />
+                <el-option label="四宫格" value="quad_grid" />
+                <el-option label="九宫格" value="nine_grid" />
+              </el-select>
+              <span class="sb-config-hint">四/九宫格自动按视角拆分</span>
+            </label>
+          </div>
+          <div class="sb-config-row sb-narration-export-row episode-sb-checkbox-row" style="margin-top:0;margin-bottom:0;flex-wrap:wrap;align-items:center;gap:12px">
+            <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings(false)">
+              全能分镜模式（每镜输出 universal_segment_text，便于 Seedance / 可灵 Omni 生视频）
+            </el-checkbox>
+            <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings(false)">
+              生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
+            </el-checkbox>
+          </div>
+        </div>
+        <div class="episode-pipeline-actions">
+                  <el-button
+                  type="primary"
+            :loading="pipelineRunning && !pipelinePaused"
+            :disabled="!currentEpisodeId || pipelineRunning"
+            title="仅提取角色、场景、道具与生成分镜文本，不生成图片与视频"
+            @click="startTextFrameworkPipeline"
+          >
+            一键生成文本框架
+          </el-button>
+
           <el-button
             type="primary"
             :loading="pipelineRunning && !pipelinePaused"
@@ -266,14 +311,7 @@
           >
             一键成片带图片视频
           </el-button>
-          <el-button
-            :loading="pipelineRunning && !pipelinePaused"
-            :disabled="!currentEpisodeId || pipelineRunning"
-            title="仅提取角色、场景、道具与生成分镜文本，不生成图片与视频"
-            @click="startTextFrameworkPipeline"
-          >
-            生成文本框架
-          </el-button>
+
           <template v-if="pipelineRunning">
             <el-button v-if="!pipelinePaused" type="warning" @click="pipelinePaused = true">⏸ 暂停</el-button>
             <el-button v-else type="success" @click="onPipelineResume">▶ 继续</el-button>
@@ -642,40 +680,14 @@
       <section id="anchor-storyboard" class="section card">
         <h2 class="section-title">
           <span>5. 分镜生成</span>
-          <span class="step-desc">根据剧本、角色、场景自动生成分镜头脚本</span>
+          <span class="step-desc">根据剧本、角色、场景自动生成分镜头脚本（分镜数量、时长、序列图与全能/解说选项见上方「本集配置」）</span>
         </h2>
-        <div class="sb-config-row">
-          <label class="sb-config-item">
-            <span class="sb-config-label">分镜数量</span>
-            <el-input-number v-model="storyboardCount" :min="1" :max="200" :step="5" placeholder="自动" class="sb-config-input" />
-            <span class="sb-config-hint sb-config-hint--estimate" :title="scriptEstimateStoryboardTitle">留空由 AI 决定{{ scriptEstimateStoryboardHint }}</span>
-          </label>
-          <span class="sb-config-divider">｜</span>
-          <label class="sb-config-item">
-            <span class="sb-config-label">视频总时长(秒)</span>
-            <el-input-number v-model="videoDuration" :min="10" :max="600" :step="5" placeholder="自动" class="sb-config-input" />
-            <span class="sb-config-hint sb-config-hint--estimate" :title="scriptEstimateVideoDurationTitle">留空由 AI 决定{{ scriptEstimateVideoDurationHint }}</span>
-          </label>
-          <span class="sb-config-divider">｜</span>
-          <label class="sb-config-item">
-            <span class="sb-config-label">序列图模式</span>
-            <el-select v-model="gridMode" size="small" style="width:110px">
-              <el-option label="单张" value="single" />
-              <el-option label="四宫格" value="quad_grid" />
-              <el-option label="九宫格" value="nine_grid" />
-            </el-select>
-            <span class="sb-config-hint">四/九宫格自动按视角拆分</span>
-          </label>
-        </div>
-        <div class="sb-config-row sb-narration-export-row" style="margin-top:10px;flex-wrap:wrap;align-items:center;gap:12px">
-          <el-checkbox v-model="storyboardUniversalOmni" @change="() => saveProjectSettings(false)">
-            全能分镜模式（每镜输出 universal_segment_text，便于 Seedance / 可灵 Omni 生视频）
-          </el-checkbox>
-          <el-checkbox v-model="storyboardIncludeNarration" @change="() => saveProjectSettings(false)">
-            生成分镜时生成解说旁白（narration，与对白分开，便于后期 TTS）
-          </el-checkbox>
+        <div
+          v-if="storyboards.length > 0"
+          class="sb-config-row sb-narration-export-row"
+          style="margin-top:0;margin-bottom:12px;flex-wrap:wrap;align-items:center;gap:12px"
+        >
           <el-button
-            v-if="storyboards.length > 0"
             class="sb-export-srt-btn"
             size="small"
             plain
@@ -2276,7 +2288,7 @@ const universalOmniPolishProgress = ref({ current: 0, total: 0, label: '' })
 const sbTruncatedWarning = ref(false)
 const sbTruncatedDismissed = ref(false)
 const videoErrorMsg = ref('')
-// 一键全流程流水线
+// 本集配置 / 成片流水线
 const pipelineRunning = ref(false)
 const pipelinePaused = ref(false)
 const pipelineErrorLog = ref([])
@@ -2463,10 +2475,10 @@ const navSteps = computed(() => {
 /** 聚合所有当前正在运行的任务标签，用于悬浮任务面板 */
 const allActiveTasks = computed(() => {
   const tasks = []
-  // 一键全流程 pipeline
+  // 本集成片流水线
   if (pipelineRunning.value) {
     const step = pipelineCurrentStep.value
-    tasks.push(step ? step.replace(/^\[步骤 \d+\/\d+\] /, '') : '一键全流程运行中...')
+    tasks.push(step ? step.replace(/^\[步骤 \d+\/\d+\] /, '') : '本集流水线运行中...')
   }
   // 整体操作
   if (storyGenerating.value || scriptGenerating.value) tasks.push('生成剧本...')
@@ -6681,6 +6693,21 @@ html.light .card:hover {
 html.light .section-title { color: #1e1b4b; }
 .pipeline-section {
   padding: 12px 16px !important;
+}
+.episode-sb-config-wrap {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+.episode-sb-config-row {
+  margin-bottom: 8px;
+}
+.episode-pipeline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
 }
 .one-click-actions {
   display: flex;

@@ -639,6 +639,7 @@ function routes(db, log) {
         'TASK: POLISH_UNIVERSAL_OMNI_SEGMENT',
         `POLISH_PASS_STAMP: ${polishPassStamp}`,
         'POLISH_REFRESH（多次点击「润色」时强制）: 在严格遵守 MULTI_BEAT_OUTPUT、子分镜秒数之和=TOTAL_CLIP_SECONDS、IMAGE_SLOT_MAP、不编造剧本外情节的前提下，**本轮输出须与 CURRENT_OMNI_DRAFT 在中文表述上有明显差异**（换动词/语序、合并或拆分从句、加强或收紧运镜与情绪描写均可；**第3行仍须与 LINE3_REQUIRED 完全一致**）。除第3行外，**禁止**与草稿逐字相同或仅标点差异；若 M 与秒数分配不变，子分镜正文也须重写措辞。',
+        'DIALOGUE_RETENTION（硬性，与 system 全能润色一致）: BASE_OMNI_CONTRACT 内 STORYBOARD FIELDS 的 DIALOGUE、NARRATION、VIDEO_PROMPT 及 CURRENT_OMNI_DRAFT 中一切对白/旁白/引号句，成稿各「分镜k」行须**逐条以「」或明确旁白写出**，保留笑点、数字、剧名、奖项名等关键信息；禁止用「两人对话」「念词带过」等概括替代具体台词。总秒数与各 Tk 不变前提下提高信息密度：台词与反应优先，少写无推进的纯氛围叠句。',
         'You are refining the CURRENT omni multi-beat prompt for a short drama vertical-video shot.',
         `FULL_EPISODE_SCRIPT（本集完整剧本，用于信息对齐与连戏；不得引入剧本未写的情节）:\n${scriptText || '(本集剧本正文为空，请仅依据下方 STORYBOARD FIELDS 与邻镜信息)'}`,
         '',

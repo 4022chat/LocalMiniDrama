@@ -1113,7 +1113,7 @@ Line 2 — exactly this pattern where M is your chosen integer (1–8), matching
 Line 3 — copy LINE3_REQUIRED from the USER message verbatim.
 
 Lines 4 through (3+M) — for each k from 1 to M, one full line:
-分镜k： Tk秒: <Chinese motion prose ONLY for that Tk-second slice: time-ordered blocking, reactions, camera **motion chain** (≥2 beats when Tk≥3s, e.g. 定镜→缓推轨), light, emotion; if dialogue exists use 「」; if silent state it. Longer Tk needs richer micro-beats; very short Tk may compress but still avoid static snapshot captions.>
+分镜k： Tk秒: <Chinese motion prose for that Tk-second slice: time-ordered blocking, reactions, camera **motion chain** (≥2 beats when Tk≥3s, e.g. 定镜→缓推轨), light, emotion. **Dialogue / VO parity (non-negotiable):** whenever STORYBOARD FIELDS or VIDEO_PROMPT or CURRENT_UNIVERSAL_SEGMENT contains spoken lines, narration, or quoted speech, you MUST weave the **full intended lines** into these beats using 「…」 (or clearly marked 旁白/内心独白 if source is narration). **Do not** replace concrete lines with vague phrases like「两人对话中」「简短交谈」. If a beat is speech-heavy, prioritize lip-sync beats and facial micro-reactions over atmospheric filler. If the slice is truly silent in source material, state 无对白/静默. Longer Tk needs richer micro-beats; very short Tk may compress staging but **not** by dropping quoted dialogue.>
 
 Reference images — CRITICAL (applies to every子分镜 line’s prose):
 - Use ONLY IMAGE_SLOT_MAP tokens @图片1, @图片2, … (Arabic digits).
@@ -1123,6 +1123,7 @@ Reference images — CRITICAL (applies to every子分镜 line’s prose):
 
 Pacing & M selection (professional):
 - Read SHOT_PACING_AND_POSITION, EPISODE_SCRIPT, NEIGHBOR_* , STORYBOARD FIELDS (movement, shot_type, dialogue density). Increase M for rapid reversals / climax / montage-like pressure; use M=1 for a single sustained long-take feel when the script implies it.
+- **Dialogue-dense shots:** if DIALOGUE or VIDEO_PROMPT carries multiple alternating lines, prefer fewer, longer beats **or** beats cut on line boundaries so **each「」line appears in full** in some beat—never stretch beats with slow decorative prose while omitting lines. Comedy / punchline timing: preserve setup→beat structure from the script fields.
 - Never change the **total** seconds: T1+…+TM must equal TOTAL_CLIP_SECONDS.
 
 Scene reference layout — CRITICAL (when SCENE_REFERENCE_LAYOUT applies):
@@ -1140,9 +1141,11 @@ function getUniversalOmniPolishPrompt() {
 ADDITIONAL_POLISH_MODE (short drama enhancement — still MUST obey MULTI_BEAT_OUTPUT, TOTAL_CLIP_SECONDS sum, IMAGE_SLOT_MAP, LINE3_REQUIRED above):
 - You receive FULL_EPISODE_SCRIPT plus NEIGHBOR blocks and structured fields. Use them only for **continuity** and **information completeness**; do NOT invent plot absent from SCRIPT + STORYBOARD FIELDS + CURRENT omni draft.
 - **Information parity**: every script-relevant fact must appear across the子分镜 lines (lines 4…3+M), without losing information when expanding; if the draft was one long line, you may reflow into M lines but keep the same facts and total seconds.
-- **Re-polish / anti-stagnation**: USER may click polish repeatedly on the same draft. Each response MUST deliver **substantially rephrased** Chinese on lines 1, 2 (if M changes), and all子分镜 body lines — same facts, same total seconds, same @图片 bindings, but **not** a copy-paste of CURRENT_OMNI_DRAFT except line 3 which must stay **character-identical** to LINE3_REQUIRED. If you would otherwise output nearly identical prose, deliberately vary verbs, clause order, and camera wording while preserving meaning.
-- **Short drama rhythm**: vertical-drama density — stakes, micro-expressions, blocking, camera motion; distribute across beats when M>1.
-- **Inner monologue & dialogue**: brief 心想 / 「」 only when supported by DIALOGUE / NARRATION / SCRIPT / draft.
+- **Quoted speech & narration (highest priority):** merge DIALOGUE, NARRATION, VIDEO_PROMPT, and CURRENT_OMNI_DRAFT for any「…」/‘…’/quoted lines. The polished output MUST still contain **every** such line’s substantive wording: keep **who says what** correct, preserve **numbers, titles, punchlines, proper nouns** (e.g. awards, skit names). You may tighten function words for rhythm but **must not** drop a line, merge two speakers into a summary, or replace dialogue with「一问一答」「念出台词」. When the classic video_prompt packs 镜头标题/动作/对话/结果/景别/情绪 into one blob, **mine it** and reflect 对话 + 结果 + 情绪 in the beats—do not only keep camera/lighting prose.
+- **Subtext (adds on top of speech, never instead):** after dialogue is fully quoted, you MAY add short 心想：… or parenthetical subtext **only** when grounded in ACTION / RESULT / emotion fields or script—no new plot.
+- **Pacing within fixed seconds:** T1…TM unchanged; raise information density—tie camera/lighting phrases to **the line being spoken** and the reaction that follows; avoid slow, generic establishing filler that crowds out「」.
+- **Re-polish / anti-stagnation**: USER may click polish repeatedly on the same draft. Each response MUST deliver **substantially rephrased** Chinese on lines 1, 2 (if M changes), and all子分镜 body lines — same facts, same total seconds, same @图片 bindings, same **complete dialogue set** as above, but **not** a copy-paste of CURRENT_OMNI_DRAFT except line 3 which must stay **character-identical** to LINE3_REQUIRED. If you would otherwise output nearly identical prose, deliberately vary verbs, clause order, and camera wording while preserving meaning and **all quoted lines**.
+- **Short drama rhythm**: vertical-drama density — stakes, micro-expressions, blocking, camera motion; distribute across beats when M>1, always carrying the spoken lines.
 - **Neighbors**: align entry/exit with NEIGHBOR_* ; no redundant retelling of the previous shot.
 - Language: Chinese for子分镜 prose; lines 1–3 format as in base prompt; M must match line 2 and match the count of「分镜k」lines.`;
 }

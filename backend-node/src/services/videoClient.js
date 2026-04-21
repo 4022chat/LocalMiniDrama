@@ -787,10 +787,23 @@ function getModelFromConfig(config, preferredModel) {
   return models[0] || '';
 }
 
+/** 仅把 http(s) 当作可下载直链，避免方舟/中转让 result_url 填入错误文案 */
+function isPlausibleHttpVideoUrl(s) {
+  if (typeof s !== 'string') return false;
+  const t = s.trim();
+  return /^https?:\/\//i.test(t);
+}
+
 /** 单层对象上的视频地址：兼容中转站使用 result_url 而非 video_url */
 function videoUrlFromRecord(rec) {
   if (!rec || typeof rec !== 'object') return null;
-  return rec.video_url || rec.result_url || rec.url || rec.output_url || null;
+  for (const k of ['video_url', 'result_url', 'url', 'output_url']) {
+    const v = rec[k];
+    if (typeof v !== 'string' || !v.trim()) continue;
+    const t = v.trim();
+    if (isPlausibleHttpVideoUrl(t)) return t;
+  }
+  return null;
 }
 
 /** 方舟 / 豆包 Seedance 等：video.transcoded_video.origin.video_url，或 play/download 直链 */
@@ -825,7 +838,9 @@ function pickVideoUrlFromItemList(list) {
       : null;
   const fromVideo = videoUrlFromArkVideoNode(item.video);
   const fromResult =
-    typeof item.result_url === 'string' && item.result_url.trim() ? item.result_url.trim() : null;
+    typeof item.result_url === 'string' && item.result_url.trim() && isPlausibleHttpVideoUrl(item.result_url)
+      ? item.result_url.trim()
+      : null;
   const flat = videoUrlFromRecord(item);
   return fromCommon || fromVideo || fromResult || flat || null;
 }
@@ -3171,10 +3186,24 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         }
         continue;
       }
-      const status = data.status || (data.data && data.data.status);
-      // ?????????? video_url / result_url / Sora url / generations[].url / data.data.*
+      const inner = data.data && typeof data.data === 'object' && !Array.isArray(data.data) ? data.data : null;
+      const innerTask =
+        inner && inner.data && typeof inner.data === 'object' && !Array.isArray(inner.data) ? inner.data : null;
+      const statusRaw = data.status || inner?.status || innerTask?.status || '';
+      const statusNorm = String(statusRaw || '').toLowerCase();
       const videoUrl = pickProxyVideoUrl(data);
-      const errMsg = data.error && (typeof data.error === 'string' ? data.error : data.error.message);
+      const errMsg =
+        (data.error && (typeof data.error === 'string' ? data.error : data.error.message)) ||
+        (inner && inner.fail_reason && String(inner.fail_reason).trim()) ||
+        (innerTask?.error &&
+          (typeof innerTask.error === 'string' ? innerTask.error : innerTask.error.message)) ||
+        null;
+      const isTerminalFailure =
+        statusNorm === 'failed' ||
+        statusNorm === 'failure' ||
+        statusNorm === 'error' ||
+        statusNorm === 'cancelled' ||
+        statusNorm === 'canceled';
       if (isVolcPoll) {
         const summaryJson = JSON.stringify(data);
         const sum =
@@ -3186,14 +3215,16 @@ async function pollVideoTask(db, log, videoGenId, taskId, config, maxAttempts = 
         log.info('[poll] 方舟/火山 解析摘要', {
           video_gen_id: videoGenId,
           round: pollRound,
-          top_level_status: status,
+          top_level_status: statusRaw,
           has_video_url: !!videoUrl,
-          error_hint: errMsg || data?.error?.code || data?.message || null,
+          error_hint: errMsg || data?.error?.code || data?.message || innerTask?.error?.code || null,
           parsed_json: sum,
         });
       }
+      if (isTerminalFailure) {
+        return { error: errMsg || String(statusRaw || '') || '任务失败' };
+      }
       if (videoUrl) return { video_url: videoUrl };
-      if (status === 'failed' || status === 'error' || status === 'cancelled' || errMsg) return { error: errMsg || status || '????' };
     } catch (e) {
       log.warn('Video poll request failed', { attempt, error: e.message });
     }

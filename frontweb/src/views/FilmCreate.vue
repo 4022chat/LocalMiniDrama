@@ -208,6 +208,9 @@
           <el-button v-if="dramaId" style="margin-left: auto" @click="onAddEpisode">
             <el-icon><Plus /></el-icon>添加一集
           </el-button>
+          <el-button v-if="dramaId" class="btn-back-drama" @click="router.push('/drama/' + dramaId + '?importBatch=true')">
+            <el-icon><Upload /></el-icon>批量导入剧集
+          </el-button>
         </div>
         <!-- 剧本文本框 -->
         <el-input

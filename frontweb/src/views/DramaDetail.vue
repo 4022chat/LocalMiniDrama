@@ -107,7 +107,8 @@
         <div class="section-header">
           <div class="section-title">分集列表</div>
           <span class="section-count">共 {{ episodes.length }} 集</span>
-          <el-button size="small" type="primary" :loading="addingEpisode" @click="onAddEpisode" style="margin-left: auto">
+          <EpisodeBatchImportDialog ref="episodeBatchImportDialogRef" :start-episode-number="nextEpisodeNumber" style="margin-left: auto" @import="onBatchImportEpisodes" />
+          <el-button size="small" type="primary" :loading="addingEpisode" @click="onAddEpisode">
             <el-icon><Plus /></el-icon>新增一集
           </el-button>
         </div>
@@ -556,10 +557,11 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, VideoPlay, Plus, Delete, Sunny, Moon, PictureFilled } from '@element-plus/icons-vue'
+import EpisodeBatchImportDialog from '@/components/EpisodeBatchImportDialog.vue'
 import { useTheme } from '@/composables/useTheme'
 import { dramaAPI } from '@/api/drama'
 import { characterLibraryAPI } from '@/api/characterLibrary'
@@ -599,6 +601,7 @@ const editDramaSceneSaving  = ref(false)
 const editDramaPropVisible = ref(false)
 const editDramaPropForm    = ref(null)
 const editDramaPropSaving  = ref(false)
+const episodeBatchImportDialogRef = ref(null)
 
 // 共享：上传图片到库条目
 async function doUploadLibImg(event, form, api, reloadFn) {
@@ -870,6 +873,11 @@ async function generateDramaPropImg() {
 const loading = ref(false)
 const drama = ref(null)
 const episodes = ref([])
+const nextEpisodeNumber = computed(() => (
+  episodes.value.length > 0
+    ? Math.max(...episodes.value.map((e) => Number(e.episode_number) || 0), 0) + 1
+    : 1
+))
 
 const infoForm = reactive({ title: '', description: '', genre: '', style: '', aspect_ratio: '16:9' })
 
@@ -935,6 +943,18 @@ function goEpisode(epId) {
 function epStatusLabel(status) {
   const map = { draft: '草稿', processing: '生成中', completed: '已完成', failed: '失败' }
   return map[status] || status
+}
+
+async function onBatchImportEpisodes(importedEpisodes) {
+  const current = episodes.value.map((ep, i) => ({
+    episode_number: ep.episode_number ?? i + 1,
+    title: ep.title || '第' + (ep.episode_number ?? i + 1) + '集',
+    script_content: ep.script_content || '',
+    description: ep.description ?? null,
+    duration: ep.duration ?? 0,
+  }))
+  await dramaAPI.saveEpisodes(dramaId, [...current, ...importedEpisodes])
+  await loadDrama()
 }
 
 const addingEpisode = ref(false)
@@ -1179,6 +1199,11 @@ watch(activeResTab, (tab) => {
 onMounted(() => {
   loadDrama()
   loadCharList()
+  if (route.query.importBatch) {
+    setTimeout(() => {
+      episodeBatchImportDialogRef.value?.openDialog?.()
+    }, 0)
+  }
 })
 </script>
 

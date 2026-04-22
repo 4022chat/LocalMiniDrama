@@ -126,6 +126,40 @@ function testConnection(log) {
   };
 }
 
+/** ModelArk / 方舟私有资产库：代理调用 CreateAssetGroup、ListAssets 等（与官方 Action 名一致） */
+function modelArkAsset(log) {
+  return async (req, res) => {
+    const body = req.body || {};
+    const action = (body.action || '').toString().trim();
+    try {
+      const modelArkAssetProxyService = require('../services/modelArkAssetProxyService');
+      const data = await modelArkAssetProxyService.callModelArkAsset(
+        {
+          base_url: body.base_url,
+          api_key: body.api_key,
+          action,
+          body: body.payload,
+          path_mode: body.path_mode,
+          http_method: body.http_method,
+          api_version: body.api_version,
+          auth_mode: body.auth_mode,
+          access_key_id: body.access_key_id,
+          secret_access_key: body.secret_access_key,
+          sign_region: body.sign_region,
+          sign_service: body.sign_service,
+          session_token: body.session_token,
+        },
+        log
+      );
+      response.success(res, data);
+    } catch (err) {
+      log.error('model-ark-asset proxy failed', { error: err.message, action });
+      const status = err.status >= 400 && err.status < 600 ? err.status : 400;
+      return response.error(res, status, 'MODEL_ARK_ASSET', err.message || '请求失败', err.payload);
+    }
+  };
+}
+
 /** 即梦2角色认证：代理 GET 素材列表（表单未保存也可用当前填写的网关与 Token） */
 function listJimeng2MaterialAssets(log) {
   return async (req, res) => {
@@ -156,6 +190,7 @@ module.exports = function aiConfigRoutes(db, log, cfg) {
     delete: remove(db, log, cfg),
     testConnection: testConnection(log),
     listJimeng2MaterialAssets: listJimeng2MaterialAssets(log),
+    modelArkAsset: modelArkAsset(log),
     bulkUpdateKey: bulkUpdateKey(db, log, cfg),
   };
 };

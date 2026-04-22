@@ -188,6 +188,11 @@
           </div>
         </div>
       </el-tab-pane>
+      <el-tab-pane label="SD2 资产管理" name="sd2_assets">
+        <div class="tab-content">
+          <Sd2AssetManagement :configs="list" />
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 添加/编辑 -->
@@ -1012,6 +1017,7 @@ import { aiAPI } from '@/api/ai'
 import { generationSettingsAPI } from '@/api/prompts'
 import PromptEditor from '@/components/PromptEditor.vue'
 import SceneModelMap from '@/components/SceneModelMap.vue'
+import Sd2AssetManagement from '@/components/Sd2AssetManagement.vue'
 
 const activeTab = ref('configs')
 const importFileRef = ref(null)

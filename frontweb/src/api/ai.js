@@ -23,6 +23,10 @@ export const aiAPI = {
   listJimeng2MaterialAssets(body) {
     return request.post('/ai-configs/jimeng2-list-assets', body)
   },
+  /** ModelArk 私有资产库：action + payload，见 AI 配置页 SD2 资产管理 */
+  modelArkAsset(body) {
+    return request.post('/ai-configs/model-ark-asset', body)
+  },
   getVendorLock() {
     return request.get('/ai-configs/vendor-lock')
   },
